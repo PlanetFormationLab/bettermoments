@@ -98,7 +98,7 @@ def doublegauss_cont(x, *params):
 
 
 def gaussthick(x, *params):
-    """
+    r"""
     Gaussian profile with non-negligible optical depth,
 
     .. math::

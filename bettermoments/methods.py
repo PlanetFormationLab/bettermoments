@@ -140,9 +140,9 @@ def collapse_second(velax, data, rms):
         rms (float): Noise per pixel in same units as ``data``.
 
     Returns:
-        ``M2`` (ndarray), ``dM2`` (ndarray):
+        ``M2`` (`ndarray`), ``dM2`` (`ndarray`):
             ``M2`` is the intensity weighted velocity dispersion with units of
-            ``velax``.  ``dM2`` is the unceratinty of ``M2`` in the same units.
+            ``velax``.  ``dM2`` is the uncertainty of ``M2`` in the same units.
     """
     chan = np.diff(velax).mean()
     vpix = chan * np.arange(data.shape[0]) + velax[0]
@@ -230,13 +230,11 @@ def collapse_percentiles(velax, data, rms):
         rms (float): Noise per pixel in same units as ``data``.
 
     Returns:
-        ``wp50`` ('ndarray'), ``dwp50`` ('ndarray'), ``wpdVb`` ('ndarray'),
-        ``dwpdVb`` ('ndarray'), ``wpdVr`` ('ndarray'), ``dwpdVr`` ('ndarray'),
-        ``wp1684`` ('ndarray'), ``wp1684`` ('ndarray'):
-            The intensity-weighted median, ``wp50``, the blue- and red-shifted
-            line widths, ``wpdVb`` and ``wpdVr``, and the line center based on
-            the center of the 16th and 84th percentile, ``wp1684``, all with
-            their associated uncertainties, ``dwp*``.
+        tuple: Eight `ndarray` values: the intensity-weighted median
+            (``wp50``, ``dwp50``), the blue- and red-shifted line widths
+            (``wpdVb``, ``dwpdVb``, ``wpdVr``, ``dwpdVr``), and the line
+            center based on the center of the 16th and 84th percentile
+            (``wp1684``, ``dwp1684``).
     """
     from tqdm import tqdm
 
@@ -303,10 +301,9 @@ def collapse_gaussian(velax, data, rms, indices=None, chunks=1, **kwargs):
             ``multiprocessing.pool``.
 
     Returns:
-        ``gv0`` (`ndarray`), ``dgv0`` (`ndarray`), ``gdV`` (`ndarray`),
-        ``dgdV`` (`ndarray`), ``gFnu`` (`ndarray`), ``dgFnu`` (`ndarray`):
-            The Gaussian center, ``gv0``, the Doppler line width, ``gdV`` and
-            line peak, ``gFnu``, all with associated uncertainties, ``dg*``.
+        tuple: Six `ndarray` values: the Gaussian center (``gv0``,
+            ``dgv0``), the Doppler line width (``gdV``, ``dgdV``) and the
+            line peak (``gFnu``, ``dgFnu``).
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gaussian', indices=indices,
@@ -332,12 +329,10 @@ def collapse_gaussthick(velax, data, rms, indices=None, chunks=1, **kwargs):
             ``multiprocessing.pool``.
 
     Returns:
-        ``gtv0`` (`ndarray`), ``dgtv0`` (`ndarray`), ``gtdV`` (`ndarray`),
-        ``dgtdV`` (`ndarray`), ``gtFnu`` (`ndarray`), ``dgtFnu`` (`ndarray`), 
-        ``gttau`` (`ndarray`), `dgttau`` (`ndarray`):
-            The Gaussian center, ``gtv0``, the Dopler width, ``gtdV``, the line
-            peak, ``gtFnu``, and the effective optical depth, ``gttau``, all
-            with associated uncertainties, ``dgt*``.
+        tuple: Eight `ndarray` values: the Gaussian center (``gtv0``,
+            ``dgtv0``), the Doppler width (``gtdV``, ``dgtdV``), the line
+            peak (``gtFnu``, ``dgtFnu``), and the effective optical depth
+            (``gttau``, ``dgttau``).
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gaussthick', indices=indices,
@@ -363,15 +358,11 @@ def collapse_gausshermite(velax, data, rms, indices=None, chunks=1, **kwargs):
             ``multiprocessing.pool``.
 
     Returns:
-        ``ghv0`` (`ndarray`), ``dghv0`` (`ndarray`), ``ghFnu`` (`ndarray`),
-        ``dghFnu`` (`ndarray`), ``ghdV`` (`ndarray`), ``dghdV`` (`ndarray`),
-        ``ghh3`` (`ndarray`), ``dghh3`` (`ndarray`), ``ghh4`` (`ndarray`),
-        ``dghh4`` (`ndarray`):
-            The Gaussian center, ``ghv0``, the line peak, ``ghFnu``, the Dopler
-            width, ``ghdV``, with additional expansion terms ``ghh3`, the
-            assymetry of the line and ``ghh4``, the saturation of the line
-            core., All values come with their  associated uncertainties,
-            ``dgt*``.
+        tuple: Ten `ndarray` values: the Gaussian center (``ghv0``,
+            ``dghv0``), the line peak (``ghFnu``, ``dghFnu``), the Doppler
+            width (``ghdV``, ``dghdV``), the ``h3`` asymmetry term
+            (``ghh3``, ``dghh3``) and the ``h4`` kurtosis term (``ghh4``,
+            ``dghh4``).
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gausshermite', indices=indices,
@@ -398,14 +389,11 @@ def collapse_doublegauss(velax, data, rms, indices=None, chunks=1, **kwargs):
             ``multiprocessing.pool``.
 
     Returns:
-        ``ggv0`` (`ndarray`), ``dggv0`` (`ndarray`), ``ggFnu`` (`ndarray`),
-        ``dggFnu`` (`ndarray`), ``ggdV`` (`ndarray`), ``dggdV`` (`ndarray`),
-        ``ggv0b`` (`ndarray`), ``dggv0b`` (`ndarray`), ``ggFnub`` (`ndarray`),
-        ``dggFnub`` (`ndarray`), ``ggdVb`` (`ndarray`), ``dggdVb`` (`ndarray`):
-            The Gaussian center, ``ggv0``, the line peak, ``ggFnu`` and the
-            Doppler width, ``ggdV``, with their  associated uncertainties,
-            ``dgg*``. All values with ``b`` ending are for the secondary
-            component.
+        tuple: Twelve `ndarray` values: the primary Gaussian center
+            (``ggv0``, ``dggv0``), line peak (``ggFnu``, ``dggFnu``) and
+            Doppler width (``ggdV``, ``dggdV``), followed by the same for
+            the secondary component (``ggv0b``, ``dggv0b``, ``ggFnub``,
+            ``dggFnub``, ``ggdVb``, ``dggdVb``).
     """
     p = collapse_analytical(velax=velax, data=data, rms=rms,
                             model_function='doublegauss', indices=indices,

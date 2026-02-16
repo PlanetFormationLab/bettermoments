@@ -43,10 +43,10 @@ def smooth_data(data, smooth=0, polyorder=0):
     Smooth the input data with a kernel of a width ``smooth``. If ``polyorder``
     is provided, will smooth with a Savitzky-Golay filter, while if
     ``polyorder=0``, the default, then only a top-hat kernel will be used. From
-    experimentation, ``smooth=5`` with ``polyorder=3``provides a good result
+    experimentation, ``smooth=5`` with ``polyorder=3`` provides a good result
     for noisy, but spectrally resolved data.
 
-    ..warning::
+    .. warning::
         When smoothing low resolution data, this can substantially alter the
         line profile, so measurements must be taken with caution.
 
@@ -57,7 +57,6 @@ def smooth_data(data, smooth=0, polyorder=0):
         polyorder (optional[int]): Polynomial order for the Savitzky-Golay
             filter. This must be smaller than ``smooth``. If not provided, the
             smoothing will only be a top-hat filter.
-        silent (bool): Whether to print the processes.
 
     Returns:
         smoothed_data (array): A smoothed copy of ``data``.
@@ -88,7 +87,7 @@ def get_channel_mask(data, firstchannel=0, lastchannel=-1, user_mask=None):
 
     Args:
         data (array): The data array to use for masking.
-        firstchanenl (optional[int]): The first channel to include. Defaults to
+        firstchannel (optional[int]): The first channel to include. Defaults to
             the first channel.
         lastchannel (optional[int]): The last channel to include. Defaults to
             the last channel. This can be both a positive value, or a negative
