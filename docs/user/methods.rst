@@ -44,6 +44,8 @@ Non-Traditional Methods
 
 .. autofunction:: bettermoments.methods.collapse_width
 
+.. autofunction:: bettermoments.methods.collapse_percentiles
+
 
 (Higher Order) Gaussian Fits
 ----------------------------
@@ -53,3 +55,7 @@ Non-Traditional Methods
 .. autofunction:: bettermoments.methods.collapse_gaussthick
 
 .. autofunction:: bettermoments.methods.collapse_gausshermite
+
+.. autofunction:: bettermoments.methods.collapse_doublegauss
+
+.. autofunction:: bettermoments.methods.collapse_analytical

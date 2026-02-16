@@ -632,7 +632,18 @@ def collapse_method_products(method):
 
 
 def check_finite_errors(moments):
-    """Check if the errors are finite, and if not, replace them."""
+    """
+    Check if the errors are finite, and if not, replace them with
+    nearest-neighbor interpolated values.
+
+    Args:
+        moments (tuple): Tuple of arrays in ``(value, error, value, error, ...)``
+            order, as returned by one of the ``collapse_*`` functions.
+
+    Returns:
+        verified_moments (tuple): Same structure as ``moments`` with any
+            non-finite error values replaced by interpolated finite errors.
+    """
     verified_moments = ()
     assert len(moments) % 2 == 0, "Odd number of moments."
     for value, error in zip(moments[::2], moments[1::2]):

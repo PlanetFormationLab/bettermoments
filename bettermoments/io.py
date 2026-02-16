@@ -11,7 +11,18 @@ import numpy as np
 
 
 def load_cube(path, stokes=0):
-    """Return the data and velocity axis from the cube."""
+    """
+    Load a FITS data cube and return the data and velocity axis.
+
+    Args:
+        path (str): Path to the FITS cube.
+        stokes (Optional[int]): Stokes index to select if the cube has a
+            Stokes axis. Defaults to ``0``.
+
+    Returns:
+        data (ndarray), velax (ndarray): The data cube with non-finite values
+            replaced by zero, and the velocity axis in [m/s].
+    """
     return _get_data(path, stokes=stokes), _get_velax(path)
 
 

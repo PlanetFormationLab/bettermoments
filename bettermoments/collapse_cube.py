@@ -19,7 +19,18 @@ warnings.filterwarnings("ignore")
 
 
 def estimate_RMS(data, N=5):
-    """Return the estimated RMS in the first and last N channels."""
+    """
+    Estimate the RMS noise from the first and last ``N`` channels of the
+    data cube, using the central 50% of the spatial extent.
+
+    Args:
+        data (ndarray): 3D data cube with the spectral axis first.
+        N (Optional[int]): Number of channels at each end to use for the
+            noise estimate. Defaults to ``5``.
+
+    Returns:
+        float: Estimated RMS noise level.
+    """
     x1, x2 = np.percentile(np.arange(data.shape[2]), [25, 75])
     y1, y2 = np.percentile(np.arange(data.shape[1]), [25, 75])
     x1, x2, y1, y2, N = int(x1), int(x2), int(y1), int(y2), int(N)
@@ -213,6 +224,7 @@ def get_combined_mask(user_mask, threshold_mask, channel_mask, combine='and'):
 
 
 def main():
+    """Command-line interface entry point for collapsing a FITS data cube."""
 
     # Parse all the command line arguments.
 

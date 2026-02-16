@@ -8,7 +8,17 @@ import numpy as np
 
 
 def free_params(model_function):
-    """Numer of free parameters in each model."""
+    """
+    Return the number of free parameters for the given model function.
+
+    Args:
+        model_function (str): Name of the model function, e.g.
+            ``'gaussian'``, ``'gaussthick'``, ``'gausshermite'``,
+            ``'doublegauss'``, or any of their ``_cont`` variants.
+
+    Returns:
+        int: Number of free parameters in the model.
+    """
     return {'gaussian': 3, 'gaussian_cont': 4, 'gaussthick': 4,
             'gaussthick_cont': 5, 'doublegauss': 6, 'doublegauss_cont': 7,
             'gausshermite': 5, 'gausshermite_cont': 6}[model_function]
@@ -152,7 +162,9 @@ def gausshermite(x, *params):
 
     Args:
         x (arr): Velocity axis in [m/s].
-        params (tuple): TBD.
+        params (tuple): The line center in [m/s], the Doppler width in
+            [m/s], the line peak in [Jy/beam], the ``h3`` skewness
+            coefficient and the ``h4`` kurtosis coefficient.
 
     Returns:
         model (arr): Model spectrum in [Jy/beam].
@@ -171,7 +183,10 @@ def gausshermite_cont(x, *params):
 
     Args:
         x (arr): Velocity axis in [m/s].
-        params (tuple): TBD.
+        params (tuple): The line center in [m/s], the Doppler width in
+            [m/s], the line peak in [Jy/beam], the ``h3`` skewness
+            coefficient, the ``h4`` kurtosis coefficient and the continuum
+            offset in [Jy/beam].
 
     Returns:
         model (arr): Model spectrum in [Jy/beam].

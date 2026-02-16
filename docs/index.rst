@@ -36,6 +36,8 @@ and you're done!
    :caption: Contents
 
    user/methods
+   user/api_helpers
+   user/api_profiles
    user/command_line
    tutorials/Cookbook_1
    user/citations

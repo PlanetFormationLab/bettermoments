@@ -10,7 +10,18 @@ from .profiles import free_params
 # -- MCMC Functions -- #
 
 def lnprior(params, priors):
-    """Log-prior function."""
+    """
+    Evaluate the log-prior probability for the given parameters.
+
+    Args:
+        params (array): Parameter values to evaluate.
+        priors (list): List of prior specifications, one per parameter. Each
+            entry is a list ``[arg1, arg2, type]`` where ``type`` is
+            ``'flat'`` or ``'gaussian'``.
+
+    Returns:
+        float: Log-prior probability.
+    """
     lnp = 0.0
     for param, prior in zip(params, priors):
         lnp += parse_prior(param, prior)
@@ -18,7 +29,19 @@ def lnprior(params, priors):
 
 
 def parse_prior(p, prior):
-    """Parse the prior function."""
+    """
+    Evaluate a single prior for a parameter value.
+
+    Args:
+        p (float): Parameter value.
+        prior (list): Prior specification ``[arg1, arg2, type]``. For
+            ``'flat'`` priors, ``arg1`` and ``arg2`` are the lower and upper
+            bounds. For ``'gaussian'`` priors, ``arg1`` is the mean and
+            ``arg2`` is the standard deviation.
+
+    Returns:
+        float: Log-prior probability for the parameter.
+    """
     if prior[-1] == 'flat':
         valid = np.logical_and(p >= prior[0], p <= prior[1])
         return np.where(valid, -np.log(prior[1] - prior[0]), -np.inf)
@@ -29,13 +52,38 @@ def parse_prior(p, prior):
 
 
 def lnlike(params, x, y, dy, model_function):
-    """Log-likelihood function."""
+    """
+    Evaluate the log-likelihood for the given parameters.
+
+    Args:
+        params (array): Model parameter values.
+        x (array): Velocity axis.
+        y (array): Observed intensities.
+        dy (array): Uncertainties on the observed intensities.
+        model_function (callable): The model function to evaluate.
+
+    Returns:
+        float: Log-likelihood value.
+    """
     y_mod = model_function(x, *params)
     return -0.5 * np.sum(((y - y_mod) / dy)**2)
 
 
 def lnpost(params, x, y, dy, priors, model_function):
-    """Log-posterior function."""
+    """
+    Evaluate the log-posterior probability for the given parameters.
+
+    Args:
+        params (array): Model parameter values.
+        x (array): Velocity axis.
+        y (array): Observed intensities.
+        dy (array): Uncertainties on the observed intensities.
+        priors (list): List of prior specifications (see ``lnprior``).
+        model_function (callable): The model function to evaluate.
+
+    Returns:
+        float: Log-posterior probability.
+    """
     lnp = lnprior(params, priors)
     if ~np.isfinite(lnp):
         return lnp
@@ -185,7 +233,27 @@ def fit_spectrum(x, y, dy, model_function, p0=None, priors=None, nwalkers=None,
 def run_sampler(x, y, dy, p0, priors, model_function, nwalkers=None,
                 nburnin=500, nsteps=500, mcmc='emcee', scatter=1e-3,
                 **kwargs):
-    """Build and run the MCMC sampler."""
+    """
+    Build and run the MCMC ensemble sampler.
+
+    Args:
+        x (array): Velocity axis.
+        y (array): Observed intensities.
+        dy (array): Uncertainties on the observed intensities.
+        p0 (array): Starting parameter values.
+        priors (list): List of prior specifications (see ``lnprior``).
+        model_function (str): Name of the model function in ``profiles.py``.
+        nwalkers (Optional[int]): Number of walkers. Defaults to
+            ``2 * len(p0)``.
+        nburnin (Optional[int]): Number of burn-in steps.
+        nsteps (Optional[int]): Number of production steps.
+        mcmc (Optional[str]): MCMC backend, ``'emcee'`` or ``'zeus'``.
+        scatter (Optional[float]): Fractional scatter applied to ``p0`` to
+            generate initial walker positions.
+
+    Returns:
+        sampler: The ``EnsembleSampler`` instance after running.
+    """
 
     # Select the MCMC backend.
 
@@ -230,7 +298,17 @@ def _estimate_dx(x, y):
 
 
 def estimate_p0(x, y, model_function):
-    """Estimate the p0 values from the spectrum."""
+    """
+    Estimate initial parameter values from the spectrum.
+
+    Args:
+        x (array): Velocity axis.
+        y (array): Observed intensities.
+        model_function (str): Name of the model function in ``profiles.py``.
+
+    Returns:
+        list: Estimated starting parameter values.
+    """
     p0 = [_estimate_x0(x, y), _estimate_dx(x, y), np.max(y)]
     if 'doublegauss' == model_function:
         v0b = np.average(x, weights=y) 
@@ -245,7 +323,20 @@ def estimate_p0(x, y, model_function):
 
 
 def optimize_p0(x, y, dy, model_function, p0, **kwargs):
-    """Returns optimized p0 from scipy.optimize.curve_fit."""
+    """
+    Optimize starting parameters using ``scipy.optimize.curve_fit``.
+
+    Args:
+        x (array): Velocity axis.
+        y (array): Observed intensities.
+        dy (array): Uncertainties on the observed intensities.
+        model_function (str): Name of the model function in ``profiles.py``.
+        p0 (array): Initial parameter guesses.
+
+    Returns:
+        p0 (array), cvar (array): Optimized parameters and the square root
+            of the diagonal of the covariance matrix.
+    """
     from scipy.optimize import curve_fit
     model_function = import_function(model_function)
     try:
@@ -258,7 +349,17 @@ def optimize_p0(x, y, dy, model_function, p0, **kwargs):
 
 
 def random_p0(p0, scatter, nwalkers):
-    """Introduce scatter to starting positions."""
+    """
+    Generate initial walker positions by adding scatter to ``p0``.
+
+    Args:
+        p0 (array): Best-fit parameter values.
+        scatter (float): Fractional scatter to apply.
+        nwalkers (int): Number of walkers.
+
+    Returns:
+        ndarray: Array of shape ``(nwalkers, ndim)`` with initial positions.
+    """
     p0 = np.squeeze(p0)
     dp0 = np.random.randn(nwalkers * len(p0)).reshape(nwalkers, len(p0))
     dp0 = np.where(p0 == 0.0, 1.0, p0)[None, :] * (1.0 + scatter * dp0)
@@ -303,7 +404,17 @@ def _cont_prior(y):
 
 
 def default_priors(x, y, model_function):
-    """Return the default flat priors."""
+    """
+    Return default flat priors based on the data range and model type.
+
+    Args:
+        x (array): Velocity axis.
+        y (array): Observed intensities.
+        model_function (str): Name of the model function in ``profiles.py``.
+
+    Returns:
+        list: List of prior specifications, one per free parameter.
+    """
     priors = [_x0_prior(x), _dx_prior(x), _A_prior(y)]
     if 'multi' in model_function:
         priors += [_x0_prior(x), _dx_prior(x), _A_prior(y)]
@@ -328,7 +439,18 @@ def import_function(function_name):
 
 
 def verify_fits(fits, free_params=None):
-    """Fill all failed fitting attemps with NaNs."""
+    """
+    Fill all failed fitting attempts with NaNs.
+
+    Args:
+        fits (list): List of fit results, where each element is an array of
+            parameter values.
+        free_params (Optional[int]): Number of free parameters. If not
+            provided, inferred from the first successful fit.
+
+    Returns:
+        ndarray: Array of fit results with failed fits replaced by NaN.
+    """
     if free_params is None:
         for p in fits:
             if np.all(np.isfinite(p)):
@@ -341,7 +463,15 @@ def verify_fits(fits, free_params=None):
 
 
 def diagnostic_plots(sampler, nburnin, mcmc='emcee'):
-    """Makes dianostic plots from the MCMC sampler."""
+    """
+    Make diagnostic plots from the MCMC sampler, including walker traces
+    and a corner plot of the posterior samples.
+
+    Args:
+        sampler: The ``EnsembleSampler`` instance after running.
+        nburnin (int): Number of burn-in steps to discard.
+        mcmc (Optional[str]): MCMC backend used, ``'emcee'`` or ``'zeus'``.
+    """
     import matplotlib.pyplot as plt
     for s, sample in enumerate(sampler.get_chain().T):
         fig, ax = plt.subplots()
