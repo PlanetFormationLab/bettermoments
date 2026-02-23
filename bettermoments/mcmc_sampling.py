@@ -2,9 +2,43 @@
 Functions to apply the fitting in an MCMC manner.
 """
 
+import multiprocessing
 import numpy as np
 from tqdm import tqdm
 from .profiles import free_params
+
+
+# -- Pool worker state (populated in each worker process via initializer) -- #
+
+_worker_state = {}
+
+
+def _pool_initializer(velax, data, rms, model_function, nparams, kwargs):
+    """Initialise each pool worker with shared read-only data."""
+    _worker_state['velax'] = velax
+    _worker_state['data'] = data
+    _worker_state['rms'] = rms
+    _worker_state['model_function'] = model_function
+    _worker_state['nparams'] = nparams
+    _worker_state['kwargs'] = kwargs
+
+
+def _fit_pixel(idx):
+    """Fit a single spectrum identified by pixel index ``(y, x)``."""
+    velax = _worker_state['velax']
+    data = _worker_state['data']
+    rms = _worker_state['rms']
+    model_function = _worker_state['model_function']
+    nparams = _worker_state['nparams']
+    kwargs = _worker_state['kwargs']
+    y = data[:, idx[0], idx[1]].copy()
+    dy = np.ones(velax.size) * rms
+    mask = np.logical_and(np.isfinite(y), y != 0.0)
+    result = np.ones((2, nparams)) * np.nan
+    if len(y[mask]) > nparams * 2:
+        result = fit_spectrum(velax[mask], y[mask], dy[mask],
+                              model_function, **kwargs)
+    return result
 
 
 # -- MCMC Functions -- #
@@ -93,11 +127,15 @@ def lnpost(params, x, y, dy, priors, model_function):
 # -- Sampling Functions -- #
 
 
-def fit_cube(velax, data, rms, model_function, indices=None, **kwargs):
+def fit_cube(velax, data, rms, model_function, indices=None, ncpu=1, **kwargs):
     """
-    Cycle through the provided indices fitting each spectrum. Only spectra
-    which have more more than twice the number of pixel compared to the number
-    of free parameters in the model will be fit.
+    Fit each spectrum in ``indices`` using ``model_function``. Spectra with
+    fewer finite values than twice the number of free parameters are skipped.
+
+    Parallelism is handled at the per-pixel level via ``multiprocessing.Pool``
+    so work is evenly distributed across workers. The shared arrays (``velax``,
+    ``data``, etc.) are copied once per worker process via the pool initializer
+    rather than being re-pickled for every task.
 
     For more information on ``kwargs``, see the ``fit_spectrum`` documentation.
 
@@ -107,9 +145,11 @@ def fit_cube(velax, data, rms, model_function, indices=None, **kwargs):
             axis must be the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
         model_function (str): Name of the model function to fit to the data.
-            Must be a function withing ``profiles.py``.
+            Must be a function within ``profiles.py``.
         indices (list): A list of pixels described by ``(y_idx, x_idx)`` tuples
             to fit. If none are provided, will fit all pixels.
+        ncpu (Optional[int]): Number of worker processes. Defaults to ``1``
+            (no pool overhead).
 
     Returns:
         fits (ndarray): A ``(Npix, Ndim, 2)`` shaped array of the fits and
@@ -130,23 +170,19 @@ def fit_cube(velax, data, rms, model_function, indices=None, **kwargs):
     indices = np.atleast_2d(indices)
     indices = indices.T if indices.shape[1] != 2 else indices
 
-    # Default axes.
+    # Fit each pixel, parallelising across workers when ncpu > 1.
 
-    x = velax.copy()
-    dy = np.ones(x.size) * rms
-
-    # Cycle through the pixels and apply the fitting.
-
-    fits = np.ones((indices.shape[0], 2, nparams)) * np.nan
-    with tqdm(total=indices.shape[0]) as pbar:
-        for i, idx in enumerate(indices):
-            y = data[:, idx[0], idx[1]].copy()
-            mask = np.logical_and(np.isfinite(y), y != 0.0)
-            if len(y[mask]) > nparams * 2:
-                fits[i] = fit_spectrum(x[mask], y[mask], dy[mask],
-                                       model_function, **kwargs)
-            pbar.update(1)
-    return np.swapaxes(fits, 1, 2)
+    initargs = (velax, data, rms, model_function, nparams, kwargs)
+    if ncpu == 1:
+        _pool_initializer(*initargs)
+        fits = list(tqdm(map(_fit_pixel, indices), total=len(indices)))
+    else:
+        with multiprocessing.Pool(processes=ncpu,
+                                  initializer=_pool_initializer,
+                                  initargs=initargs) as pool:
+            fits = list(tqdm(pool.imap(_fit_pixel, indices),
+                             total=len(indices)))
+    return np.swapaxes(np.array(fits), 1, 2)
 
 
 def fit_spectrum(x, y, dy, model_function, p0=None, priors=None, nwalkers=None,

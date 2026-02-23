@@ -445,7 +445,7 @@ def main():
         moments = collapse_gaussian(velax=velax,
                                     data=masked_data,
                                     rms=args.rms,
-                                    chunks=args.processes,
+                                    ncpu=args.processes,
                                     mcmc=None)
 
     elif args.method == 'gaussthick':
@@ -454,7 +454,7 @@ def main():
         moments = collapse_gaussthick(velax=velax,
                                       data=masked_data,
                                       rms=args.rms,
-                                      chunks=args.processes,
+                                      ncpu=args.processes,
                                       mcmc=None)
 
     elif args.method == 'gausshermite':
@@ -463,7 +463,7 @@ def main():
         moments = collapse_gausshermite(velax=velax,
                                         data=masked_data,
                                         rms=args.rms,
-                                        chunks=args.processes,
+                                        ncpu=args.processes,
                                         mcmc=None)
 
     elif args.method == 'doublegauss':
@@ -472,7 +472,7 @@ def main():
         moments = collapse_doublegauss(velax=velax,
                                        data=masked_data,
                                        rms=args.rms,
-                                       chunks=args.processes,
+                                       ncpu=args.processes,
                                        mcmc=None)
 
     else:

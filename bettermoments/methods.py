@@ -3,8 +3,7 @@ All the methods used for collapsing the cube.
 """
 
 import numpy as np
-import multiprocessing
-from itertools import repeat
+
 
 
 # -- COLLAPSE METHODS -- *
@@ -190,7 +189,8 @@ def collapse_eighth(velax, data, rms):
     """
     M8 = np.max(data, axis=0)
     dM8 = rms * np.ones(M8.shape)
-    return M8, dM8
+    mask = M8 != 0.0
+    return np.where(mask, M8, np.nan), np.where(mask, dM8, np.nan)
 
 
 def collapse_ninth(velax, data, rms):
@@ -211,7 +211,8 @@ def collapse_ninth(velax, data, rms):
     """
     M9 = velax[np.argmax(data, axis=0)]
     dM9 = 0.5 * abs(np.diff(velax).mean()) * np.ones(M9.shape)
-    return M9, dM9
+    mask = np.max(data, axis=0) != 0.0
+    return np.where(mask, M9, np.nan), np.where(mask, dM9, np.nan)
 
 
 def collapse_percentiles(velax, data, rms):
@@ -282,7 +283,7 @@ def collapse_percentiles(velax, data, rms):
 
     return wp50, dwp50, wpdVb, dwpdVb, wpdVr, dwpdVr, wp1684, dwp1684
 
-def collapse_gaussian(velax, data, rms, indices=None, chunks=1, **kwargs):
+def collapse_gaussian(velax, data, rms, indices=None, ncpu=1, **kwargs):
     r"""
     Collapse the cube by fitting a Gaussian line profile to each pixel. This
     function is a wrapper of `collapse_analytical` which provides more
@@ -296,9 +297,8 @@ def collapse_gaussian(velax, data, rms, indices=None, chunks=1, **kwargs):
         indices (Optional[list]): A list of pixels described by
             ``(y_idx, x_idx)`` tuples to fit. If none are provided, will fit
             all pixels.
-        chunks (Optional[int]): Split the cube into ``chunks`` sections and
-            run the fits with separate processes through
-            ``multiprocessing.pool``.
+        ncpu (Optional[int]): Number of worker processes to use. Defaults to
+            ``1`` (serial). Set higher to parallelise across CPU cores.
 
     Returns:
         tuple: Six `ndarray` values: the Gaussian center (``gv0``,
@@ -307,10 +307,10 @@ def collapse_gaussian(velax, data, rms, indices=None, chunks=1, **kwargs):
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gaussian', indices=indices,
-                               chunks=chunks, **kwargs)
+                               ncpu=ncpu, **kwargs)
 
 
-def collapse_gaussthick(velax, data, rms, indices=None, chunks=1, **kwargs):
+def collapse_gaussthick(velax, data, rms, indices=None, ncpu=1, **kwargs):
     r"""
     Collapse the cube by fitting a Gaussian line profile with an optically
     thick core to each pixel. This function is a wrapper of
@@ -324,9 +324,8 @@ def collapse_gaussthick(velax, data, rms, indices=None, chunks=1, **kwargs):
         indices (Optional[list]): A list of pixels described by
             ``(y_idx, x_idx)`` tuples to fit. If none are provided, will fit
             all pixels.
-        chunks (Optional[int]): Split the cube into ``chunks`` sections and
-            run the fits with separate processes through
-            ``multiprocessing.pool``.
+        ncpu (Optional[int]): Number of worker processes to use. Defaults to
+            ``1`` (serial). Set higher to parallelise across CPU cores.
 
     Returns:
         tuple: Eight `ndarray` values: the Gaussian center (``gtv0``,
@@ -336,10 +335,10 @@ def collapse_gaussthick(velax, data, rms, indices=None, chunks=1, **kwargs):
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gaussthick', indices=indices,
-                               chunks=chunks, **kwargs)
+                               ncpu=ncpu, **kwargs)
 
 
-def collapse_gausshermite(velax, data, rms, indices=None, chunks=1, **kwargs):
+def collapse_gausshermite(velax, data, rms, indices=None, ncpu=1, **kwargs):
     r"""
     Collapse the cube by fitting a Gaussian line profile with an optically
     thick core to each pixel. This function is a wrapper of
@@ -353,9 +352,8 @@ def collapse_gausshermite(velax, data, rms, indices=None, chunks=1, **kwargs):
         indices (Optional[list]): A list of pixels described by
             ``(y_idx, x_idx)`` tuples to fit. If none are provided, will fit
             all pixels.
-        chunks (Optional[int]): Split the cube into ``chunks`` sections and
-            run the fits with separate processes through
-            ``multiprocessing.pool``.
+        ncpu (Optional[int]): Number of worker processes to use. Defaults to
+            ``1`` (serial). Set higher to parallelise across CPU cores.
 
     Returns:
         tuple: Ten `ndarray` values: the Gaussian center (``ghv0``,
@@ -366,10 +364,10 @@ def collapse_gausshermite(velax, data, rms, indices=None, chunks=1, **kwargs):
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gausshermite', indices=indices,
-                               chunks=chunks, **kwargs)
+                               ncpu=ncpu, **kwargs)
 
 
-def collapse_doublegauss(velax, data, rms, indices=None, chunks=1, **kwargs):
+def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, **kwargs):
     r"""
     Collapse the cube by fitting two Gaussian line profiles to each pixel.
     The first Gaussian component will be the peak of the two components.
@@ -384,9 +382,8 @@ def collapse_doublegauss(velax, data, rms, indices=None, chunks=1, **kwargs):
         indices (Optional[list]): A list of pixels described by
             ``(y_idx, x_idx)`` tuples to fit. If none are provided, will fit
             all pixels.
-        chunks (Optional[int]): Split the cube into ``chunks`` sections and
-            run the fits with separate processes through
-            ``multiprocessing.pool``.
+        ncpu (Optional[int]): Number of worker processes to use. Defaults to
+            ``1`` (serial). Set higher to parallelise across CPU cores.
 
     Returns:
         tuple: Twelve `ndarray` values: the primary Gaussian center
@@ -397,7 +394,7 @@ def collapse_doublegauss(velax, data, rms, indices=None, chunks=1, **kwargs):
     """
     p = collapse_analytical(velax=velax, data=data, rms=rms,
                             model_function='doublegauss', indices=indices,
-                            chunks=chunks, **kwargs)
+                            ncpu=ncpu, **kwargs)
     idx = np.argmax(p[2::6], axis=0)
     pf = [np.where(idx, p[i+6], p[i]) for i in range(6)]
     pb = [np.where(idx, p[i], p[i+6]) for i in range(6)]
@@ -405,29 +402,29 @@ def collapse_doublegauss(velax, data, rms, indices=None, chunks=1, **kwargs):
     
 
 def collapse_analytical(velax, data, rms, model_function, indices=None,
-                        chunks=1, **kwargs):
+                        ncpu=1, **kwargs):
     r"""
     Collapse the cube by fitting an analytical form to each pixel, including
     the option to use an MCMC sampler which has been found to be more forgiving
-    when it comes to noisy data. The user can also specify ``chunks`` which
-    will split the data into that many chunks and pass each chunk to a separate
-    process using ``multiprocessing.pool``.
+    when it comes to noisy data. Parallelism is handled at the per-pixel level
+    so work is distributed evenly across workers.
 
-    For more information on ``kwargs``, see the ``fit_cube`` documentation.
+    For more information on ``kwargs``, see the ``fit_spectrum`` documentation
+    in ``mcmc_sampling.py``.
 
     Args:
         velax (ndarray): Velocity axis of the cube.
-        data (ndarray): Maksed intensity or brightness temperature array. The
+        data (ndarray): Masked intensity or brightness temperature array. The
             first axis must be the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
         model_function (str): Name of the model function to fit to the data.
-            Must be a function withing ``profiles.py``.
+            Must be a function within ``profiles.py``.
         indices (Optional[list]): A list of pixels described by
             ``(y_idx, x_idx)`` tuples to fit. If none are provided, will fit
             all pixels.
-        chunks (Optional[int]): Split the cube into ``chunks`` sections and
-            run the fits with separate processes through
-            ``multiprocessing.pool``.
+        ncpu (Optional[int]): Number of worker processes to use. Defaults to
+            ``1`` (serial execution with no pool overhead). Set to a higher
+            value to parallelise across CPU cores.
 
     Returns:
         results_array (ndarray): An array containing all the fits. The first
@@ -444,20 +441,10 @@ def collapse_analytical(velax, data, rms, model_function, indices=None,
     if indices is None:
         indices = _get_finite_pixels(data, 2.0 * free_params(model_function))
 
-    # Split these pixels evenly into chunks to pass off to processes.
+    # Fit each pixel, distributing work evenly across ncpu workers.
 
-    chunk_edges = np.linspace(0, indices.shape[0], chunks+1)
-    chunk_indices = np.digitize(np.arange(indices.shape[0]), chunk_edges)
-    chunk_indices = [indices[chunk_indices == i] for i in range(1, chunks+1)]
-    assert len(chunk_indices) == chunks
-
-    # Pass these off to different pools.
-
-    args = [(velax, data, rms, model_function, idx) for idx in chunk_indices]
-    with multiprocessing.Pool(processes=chunks) as pool:
-        results = _starmap_with_kwargs(pool, fit_cube, args, repeat(kwargs))
-    results = np.concatenate(results, axis=0)
-    assert results.shape[0] == indices.shape[0]
+    results = fit_cube(velax, data, rms, model_function, indices,
+                       ncpu=ncpu, **kwargs)
     results = results.reshape(results.shape[0], -1)
 
     # Populate arrays with results and return.
@@ -671,16 +658,6 @@ def _interpolate_finite_errors(value, error, fill_value=1.0):
     zi = zi(np.array([xi, yi]).T)
     return value, np.where(np.isfinite(value), zi, np.nan)
 
-
-def _starmap_with_kwargs(pool, fn, args_iter, kwargs_iter):
-    """Allow us to pass args and kwargs to ``pool.starmap``."""
-    args_for_starmap = zip(repeat(fn), args_iter, kwargs_iter)
-    return pool.starmap(_apply_args_and_kwargs, args_for_starmap)
-
-
-def _apply_args_and_kwargs(fn, args, kwargs):
-    """Unpack the args and kwargs."""
-    return fn(*args, **kwargs)
 
 
 def _get_finite_pixels(data, min_finite=3):
