@@ -14,7 +14,7 @@ setuptools.setup(
     author="Richard Teague & Daniel Foreman-Mackey",
     author_email='rteague@mit.edu',
     packages=["bettermoments"],
-    url="https://github.com/richteague/bettermoments",
+    url="https://github.com/PlanetFormationLab/bettermoments",
     license="LICENSE.md",
     description=("Robust moment map making."),
     long_description=long_description,

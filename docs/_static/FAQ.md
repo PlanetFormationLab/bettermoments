@@ -39,7 +39,7 @@ Depending on the method you chose to collapse, differnent files will be returned
 
 [Vakili & Hogg (2016)](https://arxiv.org/abs/1610.05873) showed that to get the most precise measure of a centroid, convolution with a Gaussian kernel with a width equal to the intrinsic width of the line is required. If this is invoked with the `-linewidth` argument in **quadratic**, note that the line peak will suffer. Depending on the SNR of the data, you may be able to get away without this convolution.
 
-There is also a [Jupyter Notebook](https://github.com/richteague/bettermoments/blob/master/docs/notebooks/DetermineOptimalResolution.ipynb) which you can use to estimate the best resampling rate (for example using `mstransform` in `CASA` for radio data) to get the most precise line centroid.
+There is also a [Jupyter Notebook](https://github.com/PlanetFormationLab/bettermoments/blob/master/docs/notebooks/DetermineOptimalResolution.ipynb) which you can use to estimate the best resampling rate (for example using `mstransform` in `CASA` for radio data) to get the most precise line centroid.
 
 ## _Which method is most appropriate for my data?_
 
