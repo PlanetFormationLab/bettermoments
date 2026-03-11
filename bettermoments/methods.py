@@ -188,6 +188,8 @@ def collapse_eighth(velax, data, rms):
             The peak value, ``M8``, and the associated uncertainty, ``dM8``.
     """
     M8 = np.max(data, axis=0)
+    loc = np.where(np.max(data, axis=0)==0)
+    M8[loc] = np.nan
     dM8 = rms * np.ones(M8.shape)
     mask = M8 != 0.0
     return np.where(mask, M8, np.nan), np.where(mask, dM8, np.nan)
@@ -210,6 +212,8 @@ def collapse_ninth(velax, data, rms):
             uncertainty, ``dM9``.
     """
     M9 = velax[np.argmax(data, axis=0)]
+    loc = np.where(np.max(data, axis=0)==0)
+    M9[loc] = np.nan
     dM9 = 0.5 * abs(np.diff(velax).mean()) * np.ones(M9.shape)
     mask = np.max(data, axis=0) != 0.0
     return np.where(mask, M9, np.nan), np.where(mask, dM9, np.nan)
