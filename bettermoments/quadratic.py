@@ -60,7 +60,7 @@ def quadratic(data, uncertainty=None, axis=0, x0=0.0, dx=1.0, linewidth=None):
     f_plus = data[(idx+1, range(data.shape[1]))]
 
     # Work out the polynomial coefficients
-    a0 = 13. * f_max / 12. - (f_plus + f_minus) / 24.
+    a0 = f_max
     a1 = 0.5 * (f_plus - f_minus)
     a2 = 0.5 * (f_plus + f_minus - 2*f_max)
 
