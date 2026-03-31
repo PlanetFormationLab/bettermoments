@@ -43,7 +43,7 @@ def collapse_zeroth(velax, data, rms):
     """
     chan = abs(np.diff(velax).mean())
     npix = np.sum(data != 0.0, axis=0)
-    M0 = np.trapz(data, dx=chan, axis=0)
+    M0 = np.trapezoid(data, dx=chan, axis=0)
     dM0 = chan * rms * npix**0.5 * np.ones(M0.shape)
     if M0.shape != data[0].shape:
         raise ValueError("`data` not collapsed correctly." +

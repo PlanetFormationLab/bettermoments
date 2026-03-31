@@ -330,7 +330,7 @@ def _estimate_x0(x, y):
 def _estimate_dx(x, y):
     """Estimate the Doppler width."""
     yy = np.where(np.isfinite(y), y, 0.0)
-    return np.trapz(yy, x) / np.nanmax(y) / np.sqrt(np.pi)
+    return np.trapezoid(yy, x) / np.nanmax(y) / np.sqrt(np.pi)
 
 
 def estimate_p0(x, y, model_function):
