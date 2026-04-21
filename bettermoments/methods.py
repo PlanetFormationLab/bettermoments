@@ -241,39 +241,61 @@ def collapse_percentiles(velax, data, rms):
             center based on the center of the 16th and 84th percentile
             (``wp1684``, ``dwp1684``).
     """
-    from tqdm import tqdm
-
-    # Dummy arrays.
-
-    wp = np.ones((3, data.shape[1], data.shape[2]))
-    dwp = np.ones(wp.shape)
-
-    # Calculate the weighted percentiles.
-
-    weights = np.cumsum(np.clip(data, a_min=0.0, a_max=None), axis=0)
-    weights /= weights[-1]
+    nv, ny, nx = data.shape
+    dv = 0.5 * np.diff(velax).mean()
     pcnts = np.array([0.16, 0.5, 0.84])
 
-    # Calculate the offset in velocity axis for the cumuative sum.
-    # This is because it calculates it for the value between velocity samples
-    # so there's a half-channel offset in the returned percentiles.
+    # Normalized cumulative sum along velocity axis.
 
-    dv = 0.5 * np.diff(velax).mean()
+    weights = np.cumsum(np.clip(data, a_min=0.0, a_max=None), axis=0)
+    total = weights[-1]
+    valid = total > 0.0
+    weights[:, valid] /= total[valid]
 
-    # Loop through the pixels fiding the right values.
+    # Flatten spatial dims and work only on valid pixels: (n_valid, nv).
+    # Loop runs 3 times (one per percentile) instead of ny*nx times.
 
-    with tqdm(total=data.shape[1]*data.shape[2]) as pbar:
-        for i in range(weights.shape[2]):
-            for j in range(weights.shape[1]):
-                if weights[-1, j, i] == 0.0:
-                    wp[:, j, i] = np.nan
-                    dwp[:, j, i] = np.nan
-                else:
-                    wgts = weights[:, j, i]
-                    k = np.argmin(abs(wgts[:, None] - pcnts[None, :]), axis=0)
-                    wp[:, j, i] = np.interp(pcnts, wgts, velax+dv)
-                    dwp[:, j, i] = np.gradient(velax, wgts)[k] * rms
-                pbar.update(1)
+    wv = weights.reshape(nv, -1).T          # (npix, nv)
+    valid_flat = valid.ravel()
+    wv = wv[valid_flat]                     # (n_valid, nv)
+    n_valid = wv.shape[0]
+    i_arr = np.arange(n_valid)
+
+    wp_valid = np.empty((3, n_valid))
+    dwp_valid = np.empty((3, n_valid))
+
+    for q, p in enumerate(pcnts):
+        # Upper bracket index for linear interpolation.
+        idx1 = np.argmax(wv >= p, axis=1)
+        idx0 = np.clip(idx1 - 1, 0, nv - 1)
+
+        # Linear interpolation of velax+dv at the percentile.
+        w0, w1 = wv[i_arr, idx0], wv[i_arr, idx1]
+        dw = w1 - w0
+        t = np.where(dw > 0, np.clip((p - w0) / dw, 0.0, 1.0), 0.5)
+        wp_valid[q] = velax[idx0] + dv + t * (velax[idx1] - velax[idx0])
+
+        # Nearest index for gradient dv/dw (error propagation), central diff.
+        k = np.argmin(np.abs(wv - p), axis=1)
+        km1 = np.clip(k - 1, 0, nv - 1)
+        kp1 = np.clip(k + 1, 0, nv - 1)
+        at_lo, at_hi = k == 0, k == nv - 1
+        dvel = np.where(at_lo, velax[1] - velax[0],
+               np.where(at_hi, velax[-1] - velax[-2],
+                        velax[kp1] - velax[km1]))
+        dwgt = np.where(at_lo, wv[i_arr, 1] - wv[i_arr, 0],
+               np.where(at_hi, wv[i_arr, -1] - wv[i_arr, -2],
+                        wv[i_arr, kp1] - wv[i_arr, km1]))
+        dwp_valid[q] = np.where(dwgt != 0, np.abs(dvel / dwgt) * rms, 0.0)
+
+    # Reconstruct full arrays with NaN for invalid (zero-flux) pixels.
+
+    wp = np.full((3, ny * nx), np.nan)
+    dwp = np.full((3, ny * nx), np.nan)
+    wp[:, valid_flat] = wp_valid
+    dwp[:, valid_flat] = dwp_valid
+    wp = wp.reshape(3, ny, nx)
+    dwp = dwp.reshape(3, ny, nx)
 
     # Calculate the useful quantities.
 
