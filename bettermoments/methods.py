@@ -535,7 +535,7 @@ def collapse_analytical(velax, data, rms, model_function, indices=None,
     return results_arrays
 
 
-def collapse_quadratic(velax, data, rms):
+def collapse_quadratic(velax, data, rms, acf=None):
     """
     Collapse the cube using the quadratic method presented in `Teague &
     Foreman-Mackey (2018)`_. Will return the line center, ``v0``, and the
@@ -544,6 +544,10 @@ def collapse_quadratic(velax, data, rms):
     :func:`bettermoments.collapse_cube.collapse_first` with the robustness to
     noise from :func:`bettermoments.collapse_cube.collapse_ninth`.
 
+    If ``acf`` is provided, the uncertainties are propagated through the 3x3
+    spectral covariance sub-block centred on the peak channel rather than the
+    diagonal — see :func:`collapse_zeroth`.
+
     .. _Teague & Foreman-Mackey (2018): https://iopscience.iop.org/article/10.3847/2515-5172/aae265
 
     Args:
@@ -551,6 +555,8 @@ def collapse_quadratic(velax, data, rms):
         data (ndarray): Flux density or brightness temperature array. Assumes
             that the zeroth axis is the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
+        acf (Optional[ndarray]): Normalised spectral ACF. If ``None`` (default),
+            channels are assumed independent.
 
     Returns:
         ``v0`` (`ndarray`), ``dv0`` (`ndarray`), ``Fnu`` (`ndarray`), ``dFnu`` (`ndarray`):
@@ -561,7 +567,8 @@ def collapse_quadratic(velax, data, rms):
     """
     from bettermoments.quadratic import quadratic
     chan = np.diff(velax).mean()
-    return np.squeeze(quadratic(data, x0=velax[0], dx=chan, uncertainty=rms))
+    return np.squeeze(quadratic(data, x0=velax[0], dx=chan,
+                                uncertainty=rms, acf=acf))
 
 
 def collapse_maximum(velax, data, rms):
