@@ -38,6 +38,117 @@ def estimate_RMS(data, N=5):
     return rms
 
 
+def estimate_spectral_acf(data, N=5, max_lag=None):
+    r"""
+    Estimate the normalised spectral autocorrelation function (ACF) of the
+    noise from the first and last ``N`` channels of the cube, using the same
+    central-50% spatial extent as :func:`estimate_RMS`.
+
+    Each line-free spectrum (one per spatial pixel in the central region) is
+    mean-subtracted and used to form the biased ACF estimator,
+
+    .. math::
+        \hat{\rho}(\tau) = \frac{\sum_{i} n_i n_{i+\tau}}{\sum_{i} n_i^2},
+
+    averaged across all such spectra. The returned ACF is truncated at the
+    first lag at which it falls within the white-noise band
+    :math:`\pm 2/\sqrt{N_{\rm chan}}`, where :math:`N_{\rm chan}` is the number
+    of line-free channels used per spectrum. ``acf[0]`` is always 1.
+
+    Args:
+        data (ndarray): 3D data cube with the spectral axis first.
+        N (Optional[int]): Number of channels at each end of the cube to use
+            as the line-free sample. Defaults to ``5``.
+        max_lag (Optional[int]): Hard cap on the maximum lag returned. If
+            ``None``, defaults to ``N - 1``.
+
+    Returns:
+        ndarray: 1D array of normalised ACF values, ``acf[0] = 1``, length
+            between ``1`` and ``max_lag + 1``.
+    """
+    N = int(N)
+    if N < 2:
+        raise ValueError("`N` must be at least 2 to estimate an ACF.")
+    x1, x2 = np.percentile(np.arange(data.shape[2]), [25, 75])
+    y1, y2 = np.percentile(np.arange(data.shape[1]), [25, 75])
+    x1, x2, y1, y2 = int(x1), int(x2), int(y1), int(y2)
+
+    # Stack the line-free channels at each end into one (2N, ny, nx) block
+    # and flatten the spatial dims to a (2N, npix) matrix of noise spectra.
+    noise = np.concatenate([data[:N, y1:y2, x1:x2],
+                            data[-N:, y1:y2, x1:x2]], axis=0)
+    nchan = noise.shape[0]
+    noise = noise.reshape(nchan, -1)
+    noise = noise[:, np.all(np.isfinite(noise), axis=0)]
+    if noise.shape[1] == 0:
+        raise ValueError("No finite line-free spectra found for ACF estimate.")
+
+    noise = noise - noise.mean(axis=0, keepdims=True)
+    var = np.sum(noise * noise, axis=0)
+
+    if max_lag is None:
+        max_lag = nchan - 1
+    max_lag = int(min(max_lag, nchan - 1))
+    noise_band = 2.0 / np.sqrt(nchan)
+
+    acf = [1.0]
+    for tau in range(1, max_lag + 1):
+        cov = np.sum(noise[:-tau] * noise[tau:], axis=0)
+        rho = np.mean(cov / np.where(var > 0, var, np.nan))
+        if not np.isfinite(rho):
+            break
+        acf.append(float(rho))
+        if abs(rho) < noise_band:
+            break
+    return np.array(acf)
+
+
+def build_spectral_covariance(rms, acf, nchan, eps=1e-6):
+    r"""
+    Build the Toeplitz spectral noise covariance matrix,
+
+    .. math::
+        \mathbf{C}_{ij} = \sigma^2 \rho(|i - j|),
+
+    where :math:`\rho` is the normalised autocorrelation function returned by
+    :func:`estimate_spectral_acf` and :math:`\sigma` is the per-channel RMS.
+    Lags beyond ``len(acf) - 1`` are taken to be zero.
+
+    Truncated empirical ACFs need not yield a positive-definite Toeplitz
+    matrix (the implied spectral density can go negative at high frequency).
+    To guarantee a valid covariance suitable for Cholesky decomposition, the
+    eigenvalues are clipped at a small fraction ``eps`` of the spectral
+    radius before reconstruction.
+
+    Args:
+        rms (float): Per-channel RMS noise.
+        acf (ndarray): 1D normalised ACF with ``acf[0] = 1``.
+        nchan (int): Number of channels (size of the returned matrix).
+        eps (Optional[float]): Eigenvalue floor as a fraction of the largest
+            eigenvalue. Defaults to ``1e-6``.
+
+    Returns:
+        ndarray: ``(nchan, nchan)`` symmetric positive-definite covariance.
+    """
+    acf = np.asarray(acf, dtype=float)
+    if acf.ndim != 1 or acf.size < 1 or acf[0] == 0:
+        raise ValueError("`acf` must be a 1D array with non-zero acf[0].")
+    row = np.zeros(nchan)
+    n = min(acf.size, nchan)
+    row[:n] = acf[:n] / acf[0]
+    i = np.arange(nchan)
+    lag = np.abs(i[:, None] - i[None, :])
+    C = (rms ** 2) * np.where(lag < nchan, row[np.clip(lag, 0, nchan - 1)], 0.0)
+
+    w, V = np.linalg.eigh(C)
+    floor = eps * w.max()
+    if w.min() < floor:
+        w = np.maximum(w, floor)
+        C = (V * w) @ V.T
+        C = 0.5 * (C + C.T)
+    return C
+
+
 def smooth_data(data, smooth=0, polyorder=0):
     """
     Smooth the input data with a kernel of a width ``smooth``. If ``polyorder``
@@ -258,6 +369,13 @@ def main():
                         help='Kernel in beam FWHM to smooth threshold map.')
     parser.add_argument('-stokes', default=0, type=int,
                         help='Stokes channel to use.')
+    parser.add_argument('--acf', action='store_true',
+                        help='Account for spectrally correlated noise: '
+                             'auto-estimate the noise ACF from line-free '
+                             'channels and propagate uncertainties through '
+                             'the full covariance. Supported by zeroth, '
+                             'first, second, quadratic, width, gaussian, '
+                             'gaussthick, gausshermite, doublegauss.')
     parser.add_argument('--debug', action='store_true',
                         help='Return all intermediate products to help debug.')
     parser.add_argument('--nooverwrite', action='store_false',
@@ -341,6 +459,19 @@ def main():
         if not args.silent:
             print("Estimated RMS: {:.2e}.".format(args.rms))
 
+    # Estimate the spectral noise ACF from line-free channels if requested,
+    # so uncertainties can be propagated through the full covariance.
+
+    acf = None
+    if args.acf:
+        if not args.silent:
+            print("Estimating spectral noise ACF...")
+        acf = estimate_spectral_acf(data, N=args.noisechannels)
+        if not args.silent:
+            S = 1.0 + 2.0 * acf[1:].sum()
+            print("ACF: {}  (variance inflation S = {:.2f})"
+                  .format(np.array2string(acf, precision=3), S))
+
     # Define the threshold mask. This includes the spatial smoothing of the
     # data for create Frankenmasks.
 
@@ -386,19 +517,22 @@ def main():
         from .methods import collapse_zeroth
         moments = collapse_zeroth(velax=velax,
                                   data=masked_data,
-                                  rms=args.rms)
+                                  rms=args.rms,
+                                  acf=acf)
 
     elif args.method == 'first':
         from .methods import collapse_first
         moments = collapse_first(velax=velax,
                                  data=masked_data,
-                                 rms=args.rms)
+                                 rms=args.rms,
+                                 acf=acf)
 
     elif args.method == 'second':
         from .methods import collapse_second
         moments = collapse_second(velax=velax,
                                   data=masked_data,
-                                  rms=args.rms)
+                                  rms=args.rms,
+                                  acf=acf)
 
     elif args.method == 'eighth':
         from .methods import collapse_eighth
@@ -422,7 +556,8 @@ def main():
         from .methods import collapse_quadratic
         moments = collapse_quadratic(velax=velax,
                                      data=masked_data,
-                                     rms=args.rms)
+                                     rms=args.rms,
+                                     acf=acf)
         if args.clip is not None:
             temp = moments[2] / moments[3] >= max(args.clip)
             moments *= np.where(temp, 1.0, np.nan)[None, :, :]
@@ -431,7 +566,8 @@ def main():
         from .methods import collapse_width
         moments = collapse_width(velax=velax,
                                  data=masked_data,
-                                 rms=args.rms)
+                                 rms=args.rms,
+                                 acf=acf)
 
     elif args.method == 'percentiles':
         from .methods import collapse_percentiles
@@ -446,6 +582,7 @@ def main():
                                     data=masked_data,
                                     rms=args.rms,
                                     ncpu=args.processes,
+                                    acf=acf,
                                     mcmc=None)
 
     elif args.method == 'gaussthick':
@@ -455,6 +592,7 @@ def main():
                                       data=masked_data,
                                       rms=args.rms,
                                       ncpu=args.processes,
+                                      acf=acf,
                                       mcmc=None)
 
     elif args.method == 'gausshermite':
@@ -464,6 +602,7 @@ def main():
                                         data=masked_data,
                                         rms=args.rms,
                                         ncpu=args.processes,
+                                        acf=acf,
                                         mcmc=None)
 
     elif args.method == 'doublegauss':
@@ -473,6 +612,7 @@ def main():
                                        data=masked_data,
                                        rms=args.rms,
                                        ncpu=args.processes,
+                                       acf=acf,
                                        mcmc=None)
 
     else:

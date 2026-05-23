@@ -1,7 +1,8 @@
 import numpy as np
 
 
-def quadratic(data, uncertainty=None, axis=0, x0=0.0, dx=1.0, linewidth=None):
+def quadratic(data, uncertainty=None, axis=0, x0=0.0, dx=1.0, linewidth=None,
+              acf=None):
     """
     Compute the quadratic estimate of the centroid of a line in a data cube.
 
@@ -29,6 +30,12 @@ def quadratic(data, uncertainty=None, axis=0, x0=0.0, dx=1.0, linewidth=None):
         x0 (Optional[float]): The wavelength/frequency/velocity/etc. value for
             the zeroth pixel in the ``axis'' dimension.
         dx (Optional[float]): The pixel scale of the ``axis'' dimension.
+        acf (Optional[ndarray]): Normalised spectral ACF (``acf[0] = 1``) used
+            to construct the 3x3 noise covariance sub-block centred on the
+            peak channel. When provided, ``uncertainty`` must be a scalar
+            (per-channel RMS) and the off-diagonal terms ``acf[1]``, ``acf[2]``
+            enter the propagation correctly. If ``None`` (default), channels
+            are assumed independent.
 
     Returns:
         x_max (ndarray): The centroid of the brightest line along the ``axis''
@@ -89,31 +96,52 @@ def quadratic(data, uncertainty=None, axis=0, x0=0.0, dx=1.0, linewidth=None):
             np.reshape(y_max, shape), None,
             np.reshape(2. * a2, shape), None)
 
-    # Compute the uncertainty
-    try:
-        uncertainty = float(uncertainty) + np.zeros_like(data)
-    except TypeError:
+    # Per-pixel sensitivity vectors g_x, g_y of shape (3, npix) for the three
+    # channels (idx-1, idx, idx+1) entering the parabolic fit. Verified
+    # analytically against finite differences and against Monte Carlo.
+    inv_a2sq = 1.0 / (a2 ** 2)
+    gx = np.stack([0.25 * (a1 + a2) * inv_a2sq,
+                   -0.5 * a1 * inv_a2sq,
+                   0.25 * (a1 - a2) * inv_a2sq])
+    gy = np.stack([0.125 * a1 * (a1 + 2.0 * a2) * inv_a2sq,
+                   1.0 - 0.25 * a1**2 * inv_a2sq,
+                   0.125 * a1 * (a1 - 2.0 * a2) * inv_a2sq])
 
-        # An array of errors was provided
-        uncertainty = np.moveaxis(np.atleast_1d(uncertainty), axis, 0)
-        if uncertainty.shape[0] != data.shape[0] or \
-                shape != uncertainty.shape[1:]:
-            raise ValueError("the data and uncertainty must have the same "
-                             "shape")
-        uncertainty = np.reshape(uncertainty, (len(uncertainty), -1))
+    if acf is None:
+        try:
+            uncertainty = float(uncertainty) + np.zeros_like(data)
+        except TypeError:
 
-    df_minus = uncertainty[(idx-1, range(uncertainty.shape[1]))]**2
-    df_max = uncertainty[(idx, range(uncertainty.shape[1]))]**2
-    df_plus = uncertainty[(idx+1, range(uncertainty.shape[1]))]**2
+            # An array of errors was provided
+            uncertainty = np.moveaxis(np.atleast_1d(uncertainty), axis, 0)
+            if uncertainty.shape[0] != data.shape[0] or \
+                    shape != uncertainty.shape[1:]:
+                raise ValueError("the data and uncertainty must have the same "
+                                 "shape")
+            uncertainty = np.reshape(uncertainty, (len(uncertainty), -1))
 
-    x_max_var = 0.0625*(a1**2*(df_minus + df_plus) +
-                        a1*a2*(df_minus - df_plus) +
-                        a2**2*(4.0*df_max + df_minus + df_plus))/a2**4
+        df = np.stack([uncertainty[(idx-1, range(uncertainty.shape[1]))]**2,
+                       uncertainty[(idx, range(uncertainty.shape[1]))]**2,
+                       uncertainty[(idx+1, range(uncertainty.shape[1]))]**2])
+        x_max_var = np.sum(gx**2 * df, axis=0)
+        y_max_var = np.sum(gy**2 * df, axis=0)
+    else:
+        try:
+            rms = float(uncertainty)
+        except TypeError:
+            raise ValueError("`uncertainty` must be a scalar when `acf` is "
+                             "provided.")
+        acf_arr = np.asarray(acf, dtype=float)
+        rho1 = acf_arr[1] if acf_arr.size > 1 else 0.0
+        rho2 = acf_arr[2] if acf_arr.size > 2 else 0.0
+        C3 = (rms ** 2) * np.array([[1.0, rho1, rho2],
+                                    [rho1, 1.0, rho1],
+                                    [rho2, rho1, 1.0]])
+        x_max_var = np.einsum('ip,ij,jp->p', gx, C3, gx)
+        y_max_var = np.einsum('ip,ij,jp->p', gy, C3, gy)
 
-    y_max_var = 0.015625*(a1**4*(df_minus + df_plus) +
-                          2.0*a1**3*a2*(df_minus - df_plus) +
-                          4.0*a1**2*a2**2*(df_minus + df_plus) +
-                          64.0*a2**4*df_max)/a2**4
+    x_max_var = np.clip(x_max_var, 0.0, None)
+    y_max_var = np.clip(y_max_var, 0.0, None)
 
     return (
         np.reshape(x0 + dx * x_max, shape),

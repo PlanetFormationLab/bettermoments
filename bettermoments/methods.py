@@ -5,11 +5,35 @@ All the methods used for collapsing the cube.
 import numpy as np
 
 
+# -- CORRELATED NOISE PROPAGATION -- #
+
+
+def _propagate_covariance(g, rms, acf):
+    r"""
+    Return ``sqrt(g^T C g)`` per spatial pixel, where ``C = rms^2 * R`` and
+    ``R`` is the symmetric Toeplitz correlation matrix built from ``acf``.
+
+    Args:
+        g (ndarray): Per-pixel sensitivity vector with shape ``(nv, ...)``.
+            The diagonal-noise uncertainty is ``rms * sqrt(sum(g**2, axis=0))``.
+        rms (float): Per-channel RMS noise.
+        acf (ndarray): 1D normalised ACF with ``acf[0] = 1``.
+
+    Returns:
+        ndarray: Uncertainty array with shape ``g.shape[1:]``.
+    """
+    from .collapse_cube import build_spectral_covariance
+    nv = g.shape[0]
+    C = build_spectral_covariance(rms=rms, acf=acf, nchan=nv)
+    flat = g.reshape(nv, -1)
+    var = np.einsum('ip,ip->p', flat, C @ flat)
+    return np.sqrt(np.clip(var, 0.0, None)).reshape(g.shape[1:])
+
 
 # -- COLLAPSE METHODS -- *
 
 
-def collapse_zeroth(velax, data, rms):
+def collapse_zeroth(velax, data, rms, acf=None):
     r"""
     Collapses the cube by integrating along the spectral axis. It will return
     the integrated intensity along the spectral axis, ``M0``, and the
@@ -28,6 +52,12 @@ def collapse_zeroth(velax, data, rms):
     density at the :math:`i^{\rm th}` channel, respectively and the sum goes
     over the whole ``axis``.
 
+    If ``acf`` is provided, the uncertainty is propagated through the full
+    spectral covariance matrix
+    :math:`C_{ij} = \sigma^2 \rho(|i - j|)` rather than its diagonal,
+    correctly accounting for noise correlation between channels (e.g.\ from
+    Hanning smoothing). See :func:`bettermoments.estimate_spectral_acf`.
+
     .. _Teague (2019): https://iopscience.iop.org/article/10.3847/2515-5172/ab2125
 
     Args:
@@ -35,6 +65,9 @@ def collapse_zeroth(velax, data, rms):
         data (ndarray): Flux densities or brightness temperature array. Assumes
             that the first axis is the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
+        acf (Optional[ndarray]): Normalised spectral ACF, e.g.\ from
+            :func:`bettermoments.estimate_spectral_acf`. If ``None`` (default),
+            channels are assumed independent.
 
     Returns:
         ``M0`` (`ndarray`), ``dM0`` (`ndarray`):
@@ -44,7 +77,11 @@ def collapse_zeroth(velax, data, rms):
     chan = abs(np.diff(velax).mean())
     npix = np.sum(data != 0.0, axis=0)
     M0 = np.trapezoid(data, dx=chan, axis=0)
-    dM0 = chan * rms * npix**0.5 * np.ones(M0.shape)
+    if acf is None:
+        dM0 = chan * rms * npix**0.5 * np.ones(M0.shape)
+    else:
+        g = chan * (data != 0.0).astype(float)
+        dM0 = _propagate_covariance(g, rms, acf)
     if M0.shape != data[0].shape:
         raise ValueError("`data` not collapsed correctly." +
                          " Expected shape: {},".format(data[0].shape) +
@@ -55,7 +92,7 @@ def collapse_zeroth(velax, data, rms):
     return M0, dM0
 
 
-def collapse_first(velax, data, rms):
+def collapse_first(velax, data, rms, acf=None):
     r"""
     Collapses the cube using the intensity weighted average velocity (or first
     moment map). For a symmetric line profile this will be the line center,
@@ -74,6 +111,9 @@ def collapse_first(velax, data, rms):
 
     where :math:`\sigma_i` is the rms noise.
 
+    If ``acf`` is provided, the uncertainty is propagated through the full
+    spectral covariance rather than its diagonal — see :func:`collapse_zeroth`.
+
     .. _Teague (2019): https://iopscience.iop.org/article/10.3847/2515-5172/ab2125
 
     Args:
@@ -81,6 +121,8 @@ def collapse_first(velax, data, rms):
         data (ndarray): Flux densities or brightness temperature array. Assumes
             that the zeroth axis is the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
+        acf (Optional[ndarray]): Normalised spectral ACF. If ``None`` (default),
+            channels are assumed independent.
 
     Returns:
         ``M1`` (`ndarray`), ``dM1`` (`ndarray`):
@@ -95,8 +137,11 @@ def collapse_first(velax, data, rms):
     weights = 1e-10 * np.random.rand(data.size).reshape(data.shape)
     weights = np.where(data != 0.0, abs(data), weights)
     M1 = np.average(vpix, weights=weights, axis=0)
-    dM1 = (vpix - M1[None, :, :]) * rms / np.sum(weights, axis=0)
-    dM1 = np.sqrt(np.sum(dM1**2, axis=0))
+    g = (vpix - M1[None, :, :]) / np.sum(weights, axis=0)
+    if acf is None:
+        dM1 = np.sqrt(np.sum((g * rms)**2, axis=0))
+    else:
+        dM1 = _propagate_covariance(g, rms, acf)
 
     npix = np.sum(data != 0.0, axis=0)
     M1 = np.where(npix >= 1.0, M1, np.nan)
@@ -112,7 +157,7 @@ def collapse_first(velax, data, rms):
     return M1, dM1
 
 
-def collapse_second(velax, data, rms):
+def collapse_second(velax, data, rms, acf=None):
     r"""
     Collapses the cube using the intensity-weighted average velocity dispersion
     (or second moment). For a symmetric line profile this will be a measure of
@@ -130,6 +175,9 @@ def collapse_second(velax, data, rms):
 
     where :math:`\sigma_i` is the rms noise in the :math:`i^{\rm th}` channel.
 
+    If ``acf`` is provided, the uncertainty is propagated through the full
+    spectral covariance rather than its diagonal — see :func:`collapse_zeroth`.
+
     .. _Teague (2019): https://iopscience.iop.org/article/10.3847/2515-5172/ab2125
 
     Args:
@@ -137,6 +185,8 @@ def collapse_second(velax, data, rms):
         data (ndarray): Flux densities or brightness temperature array. Assumes
             that the first axis is the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
+        acf (Optional[ndarray]): Normalised spectral ACF. If ``None`` (default),
+            channels are assumed independent.
 
     Returns:
         ``M2`` (`ndarray`), ``dM2`` (`ndarray`):
@@ -155,8 +205,11 @@ def collapse_second(velax, data, rms):
     M2 = np.sum(weights * (vpix - M1)**2, axis=0) / np.sum(weights, axis=0)
     M2 = np.sqrt(M2)
 
-    dM2 = ((vpix - M1)**2 - M2**2) * rms / np.sum(weights, axis=0)
-    dM2 = np.sqrt(np.sum(dM2**2, axis=0)) / 2. / M2
+    g = ((vpix - M1)**2 - M2**2) / (2.0 * M2 * np.sum(weights, axis=0))
+    if acf is None:
+        dM2 = np.sqrt(np.sum((g * rms)**2, axis=0))
+    else:
+        dM2 = _propagate_covariance(g, rms, acf)
 
     npix = np.sum(data != 0.0, axis=0)
     M2 = np.where(npix >= 1.0, M2, np.nan)
@@ -309,7 +362,8 @@ def collapse_percentiles(velax, data, rms):
 
     return wp50, dwp50, wpdVb, dwpdVb, wpdVr, dwpdVr, wp1684, dwp1684
 
-def collapse_gaussian(velax, data, rms, indices=None, ncpu=1, **kwargs):
+def collapse_gaussian(velax, data, rms, indices=None, ncpu=1, acf=None,
+                      **kwargs):
     r"""
     Collapse the cube by fitting a Gaussian line profile to each pixel. This
     function is a wrapper of `collapse_analytical` which provides more
@@ -333,10 +387,11 @@ def collapse_gaussian(velax, data, rms, indices=None, ncpu=1, **kwargs):
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gaussian', indices=indices,
-                               ncpu=ncpu, **kwargs)
+                               ncpu=ncpu, acf=acf, **kwargs)
 
 
-def collapse_gaussthick(velax, data, rms, indices=None, ncpu=1, **kwargs):
+def collapse_gaussthick(velax, data, rms, indices=None, ncpu=1, acf=None,
+                        **kwargs):
     r"""
     Collapse the cube by fitting a Gaussian line profile with an optically
     thick core to each pixel. This function is a wrapper of
@@ -361,10 +416,11 @@ def collapse_gaussthick(velax, data, rms, indices=None, ncpu=1, **kwargs):
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gaussthick', indices=indices,
-                               ncpu=ncpu, **kwargs)
+                               ncpu=ncpu, acf=acf, **kwargs)
 
 
-def collapse_gausshermite(velax, data, rms, indices=None, ncpu=1, **kwargs):
+def collapse_gausshermite(velax, data, rms, indices=None, ncpu=1, acf=None,
+                          **kwargs):
     r"""
     Collapse the cube by fitting a Gaussian line profile with an optically
     thick core to each pixel. This function is a wrapper of
@@ -390,10 +446,11 @@ def collapse_gausshermite(velax, data, rms, indices=None, ncpu=1, **kwargs):
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gausshermite', indices=indices,
-                               ncpu=ncpu, **kwargs)
+                               ncpu=ncpu, acf=acf, **kwargs)
 
 
-def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, **kwargs):
+def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, acf=None,
+                         **kwargs):
     r"""
     Collapse the cube by fitting two Gaussian line profiles to each pixel.
     The first Gaussian component will be the peak of the two components.
@@ -420,7 +477,7 @@ def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, **kwargs):
     """
     p = collapse_analytical(velax=velax, data=data, rms=rms,
                             model_function='doublegauss', indices=indices,
-                            ncpu=ncpu, **kwargs)
+                            ncpu=ncpu, acf=acf, **kwargs)
     idx = np.argmax(p[2::6], axis=0)
     pf = [np.where(idx, p[i+6], p[i]) for i in range(6)]
     pb = [np.where(idx, p[i], p[i+6]) for i in range(6)]
@@ -428,7 +485,7 @@ def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, **kwargs):
     
 
 def collapse_analytical(velax, data, rms, model_function, indices=None,
-                        ncpu=1, **kwargs):
+                        ncpu=1, acf=None, **kwargs):
     r"""
     Collapse the cube by fitting an analytical form to each pixel, including
     the option to use an MCMC sampler which has been found to be more forgiving
@@ -470,7 +527,7 @@ def collapse_analytical(velax, data, rms, model_function, indices=None,
     # Fit each pixel, distributing work evenly across ncpu workers.
 
     results = fit_cube(velax, data, rms, model_function, indices,
-                       ncpu=ncpu, **kwargs)
+                       ncpu=ncpu, acf=acf, **kwargs)
     results = results.reshape(results.shape[0], -1)
 
     # Populate arrays with results and return.
@@ -482,7 +539,7 @@ def collapse_analytical(velax, data, rms, model_function, indices=None,
     return results_arrays
 
 
-def collapse_quadratic(velax, data, rms):
+def collapse_quadratic(velax, data, rms, acf=None):
     """
     Collapse the cube using the quadratic method presented in `Teague &
     Foreman-Mackey (2018)`_. Will return the line center, ``v0``, and the
@@ -491,6 +548,10 @@ def collapse_quadratic(velax, data, rms):
     :func:`bettermoments.collapse_cube.collapse_first` with the robustness to
     noise from :func:`bettermoments.collapse_cube.collapse_ninth`.
 
+    If ``acf`` is provided, the uncertainties are propagated through the 3x3
+    spectral covariance sub-block centred on the peak channel rather than the
+    diagonal — see :func:`collapse_zeroth`.
+
     .. _Teague & Foreman-Mackey (2018): https://iopscience.iop.org/article/10.3847/2515-5172/aae265
 
     Args:
@@ -498,6 +559,8 @@ def collapse_quadratic(velax, data, rms):
         data (ndarray): Flux density or brightness temperature array. Assumes
             that the zeroth axis is the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
+        acf (Optional[ndarray]): Normalised spectral ACF. If ``None`` (default),
+            channels are assumed independent.
 
     Returns:
         ``v0`` (`ndarray`), ``dv0`` (`ndarray`), ``Fnu`` (`ndarray`), ``dFnu`` (`ndarray`):
@@ -508,7 +571,8 @@ def collapse_quadratic(velax, data, rms):
     """
     from bettermoments.quadratic import quadratic
     chan = np.diff(velax).mean()
-    return np.squeeze(quadratic(data, x0=velax[0], dx=chan, uncertainty=rms))
+    return np.squeeze(quadratic(data, x0=velax[0], dx=chan,
+                                uncertainty=rms, acf=acf))
 
 
 def collapse_maximum(velax, data, rms):
@@ -534,7 +598,7 @@ def collapse_maximum(velax, data, rms):
     return M8, dM8, M9, dM9
 
 
-def collapse_width(velax, data, rms):
+def collapse_width(velax, data, rms, acf=None):
     r"""
     Returns an effective width, a rescaled ratio of the integrated intensity
     and the line peak. For a Gaussian line profile this would be the Doppler
@@ -570,8 +634,9 @@ def collapse_width(velax, data, rms):
             The effective velocity dispersion, ``dV`` and ``ddV``, the
             associated uncertainty.
     """
-    M0, dM0 = collapse_zeroth(velax=velax, data=data, rms=rms)
-    _, _, Fnu, dFnu = collapse_quadratic(velax=velax, data=data, rms=rms)
+    M0, dM0 = collapse_zeroth(velax=velax, data=data, rms=rms, acf=acf)
+    _, _, Fnu, dFnu = collapse_quadratic(velax=velax, data=data, rms=rms,
+                                         acf=acf)
     dV = M0 / Fnu / np.sqrt(np.pi)
     ddV = dV * np.hypot(dFnu / Fnu, dM0 / M0)
     return abs(dV), abs(ddV)
