@@ -5,11 +5,35 @@ All the methods used for collapsing the cube.
 import numpy as np
 
 
+# -- CORRELATED NOISE PROPAGATION -- #
+
+
+def _propagate_covariance(g, rms, acf):
+    r"""
+    Return ``sqrt(g^T C g)`` per spatial pixel, where ``C = rms^2 * R`` and
+    ``R`` is the symmetric Toeplitz correlation matrix built from ``acf``.
+
+    Args:
+        g (ndarray): Per-pixel sensitivity vector with shape ``(nv, ...)``.
+            The diagonal-noise uncertainty is ``rms * sqrt(sum(g**2, axis=0))``.
+        rms (float): Per-channel RMS noise.
+        acf (ndarray): 1D normalised ACF with ``acf[0] = 1``.
+
+    Returns:
+        ndarray: Uncertainty array with shape ``g.shape[1:]``.
+    """
+    from .collapse_cube import build_spectral_covariance
+    nv = g.shape[0]
+    C = build_spectral_covariance(rms=rms, acf=acf, nchan=nv)
+    flat = g.reshape(nv, -1)
+    var = np.einsum('ip,ip->p', flat, C @ flat)
+    return np.sqrt(np.clip(var, 0.0, None)).reshape(g.shape[1:])
+
 
 # -- COLLAPSE METHODS -- *
 
 
-def collapse_zeroth(velax, data, rms):
+def collapse_zeroth(velax, data, rms, acf=None):
     r"""
     Collapses the cube by integrating along the spectral axis. It will return
     the integrated intensity along the spectral axis, ``M0``, and the
@@ -28,6 +52,12 @@ def collapse_zeroth(velax, data, rms):
     density at the :math:`i^{\rm th}` channel, respectively and the sum goes
     over the whole ``axis``.
 
+    If ``acf`` is provided, the uncertainty is propagated through the full
+    spectral covariance matrix
+    :math:`C_{ij} = \sigma^2 \rho(|i - j|)` rather than its diagonal,
+    correctly accounting for noise correlation between channels (e.g.\ from
+    Hanning smoothing). See :func:`bettermoments.estimate_spectral_acf`.
+
     .. _Teague (2019): https://iopscience.iop.org/article/10.3847/2515-5172/ab2125
 
     Args:
@@ -35,6 +65,9 @@ def collapse_zeroth(velax, data, rms):
         data (ndarray): Flux densities or brightness temperature array. Assumes
             that the first axis is the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
+        acf (Optional[ndarray]): Normalised spectral ACF, e.g.\ from
+            :func:`bettermoments.estimate_spectral_acf`. If ``None`` (default),
+            channels are assumed independent.
 
     Returns:
         ``M0`` (`ndarray`), ``dM0`` (`ndarray`):
@@ -44,7 +77,11 @@ def collapse_zeroth(velax, data, rms):
     chan = abs(np.diff(velax).mean())
     npix = np.sum(data != 0.0, axis=0)
     M0 = np.trapezoid(data, dx=chan, axis=0)
-    dM0 = chan * rms * npix**0.5 * np.ones(M0.shape)
+    if acf is None:
+        dM0 = chan * rms * npix**0.5 * np.ones(M0.shape)
+    else:
+        g = chan * (data != 0.0).astype(float)
+        dM0 = _propagate_covariance(g, rms, acf)
     if M0.shape != data[0].shape:
         raise ValueError("`data` not collapsed correctly." +
                          " Expected shape: {},".format(data[0].shape) +
@@ -55,7 +92,7 @@ def collapse_zeroth(velax, data, rms):
     return M0, dM0
 
 
-def collapse_first(velax, data, rms):
+def collapse_first(velax, data, rms, acf=None):
     r"""
     Collapses the cube using the intensity weighted average velocity (or first
     moment map). For a symmetric line profile this will be the line center,
@@ -74,6 +111,9 @@ def collapse_first(velax, data, rms):
 
     where :math:`\sigma_i` is the rms noise.
 
+    If ``acf`` is provided, the uncertainty is propagated through the full
+    spectral covariance rather than its diagonal — see :func:`collapse_zeroth`.
+
     .. _Teague (2019): https://iopscience.iop.org/article/10.3847/2515-5172/ab2125
 
     Args:
@@ -81,6 +121,8 @@ def collapse_first(velax, data, rms):
         data (ndarray): Flux densities or brightness temperature array. Assumes
             that the zeroth axis is the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
+        acf (Optional[ndarray]): Normalised spectral ACF. If ``None`` (default),
+            channels are assumed independent.
 
     Returns:
         ``M1`` (`ndarray`), ``dM1`` (`ndarray`):
@@ -95,8 +137,11 @@ def collapse_first(velax, data, rms):
     weights = 1e-10 * np.random.rand(data.size).reshape(data.shape)
     weights = np.where(data != 0.0, abs(data), weights)
     M1 = np.average(vpix, weights=weights, axis=0)
-    dM1 = (vpix - M1[None, :, :]) * rms / np.sum(weights, axis=0)
-    dM1 = np.sqrt(np.sum(dM1**2, axis=0))
+    g = (vpix - M1[None, :, :]) / np.sum(weights, axis=0)
+    if acf is None:
+        dM1 = np.sqrt(np.sum((g * rms)**2, axis=0))
+    else:
+        dM1 = _propagate_covariance(g, rms, acf)
 
     npix = np.sum(data != 0.0, axis=0)
     M1 = np.where(npix >= 1.0, M1, np.nan)
@@ -112,7 +157,7 @@ def collapse_first(velax, data, rms):
     return M1, dM1
 
 
-def collapse_second(velax, data, rms):
+def collapse_second(velax, data, rms, acf=None):
     r"""
     Collapses the cube using the intensity-weighted average velocity dispersion
     (or second moment). For a symmetric line profile this will be a measure of
@@ -130,6 +175,9 @@ def collapse_second(velax, data, rms):
 
     where :math:`\sigma_i` is the rms noise in the :math:`i^{\rm th}` channel.
 
+    If ``acf`` is provided, the uncertainty is propagated through the full
+    spectral covariance rather than its diagonal — see :func:`collapse_zeroth`.
+
     .. _Teague (2019): https://iopscience.iop.org/article/10.3847/2515-5172/ab2125
 
     Args:
@@ -137,6 +185,8 @@ def collapse_second(velax, data, rms):
         data (ndarray): Flux densities or brightness temperature array. Assumes
             that the first axis is the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
+        acf (Optional[ndarray]): Normalised spectral ACF. If ``None`` (default),
+            channels are assumed independent.
 
     Returns:
         ``M2`` (`ndarray`), ``dM2`` (`ndarray`):
@@ -155,8 +205,11 @@ def collapse_second(velax, data, rms):
     M2 = np.sum(weights * (vpix - M1)**2, axis=0) / np.sum(weights, axis=0)
     M2 = np.sqrt(M2)
 
-    dM2 = ((vpix - M1)**2 - M2**2) * rms / np.sum(weights, axis=0)
-    dM2 = np.sqrt(np.sum(dM2**2, axis=0)) / 2. / M2
+    g = ((vpix - M1)**2 - M2**2) / (2.0 * M2 * np.sum(weights, axis=0))
+    if acf is None:
+        dM2 = np.sqrt(np.sum((g * rms)**2, axis=0))
+    else:
+        dM2 = _propagate_covariance(g, rms, acf)
 
     npix = np.sum(data != 0.0, axis=0)
     M2 = np.where(npix >= 1.0, M2, np.nan)
