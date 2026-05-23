@@ -598,7 +598,7 @@ def collapse_maximum(velax, data, rms):
     return M8, dM8, M9, dM9
 
 
-def collapse_width(velax, data, rms):
+def collapse_width(velax, data, rms, acf=None):
     r"""
     Returns an effective width, a rescaled ratio of the integrated intensity
     and the line peak. For a Gaussian line profile this would be the Doppler
@@ -634,8 +634,9 @@ def collapse_width(velax, data, rms):
             The effective velocity dispersion, ``dV`` and ``ddV``, the
             associated uncertainty.
     """
-    M0, dM0 = collapse_zeroth(velax=velax, data=data, rms=rms)
-    _, _, Fnu, dFnu = collapse_quadratic(velax=velax, data=data, rms=rms)
+    M0, dM0 = collapse_zeroth(velax=velax, data=data, rms=rms, acf=acf)
+    _, _, Fnu, dFnu = collapse_quadratic(velax=velax, data=data, rms=rms,
+                                         acf=acf)
     dV = M0 / Fnu / np.sqrt(np.pi)
     ddV = dV * np.hypot(dFnu / Fnu, dM0 / M0)
     return abs(dV), abs(ddV)

@@ -369,6 +369,13 @@ def main():
                         help='Kernel in beam FWHM to smooth threshold map.')
     parser.add_argument('-stokes', default=0, type=int,
                         help='Stokes channel to use.')
+    parser.add_argument('--acf', action='store_true',
+                        help='Account for spectrally correlated noise: '
+                             'auto-estimate the noise ACF from line-free '
+                             'channels and propagate uncertainties through '
+                             'the full covariance. Supported by zeroth, '
+                             'first, second, quadratic, width, gaussian, '
+                             'gaussthick, gausshermite, doublegauss.')
     parser.add_argument('--debug', action='store_true',
                         help='Return all intermediate products to help debug.')
     parser.add_argument('--nooverwrite', action='store_false',
@@ -452,6 +459,19 @@ def main():
         if not args.silent:
             print("Estimated RMS: {:.2e}.".format(args.rms))
 
+    # Estimate the spectral noise ACF from line-free channels if requested,
+    # so uncertainties can be propagated through the full covariance.
+
+    acf = None
+    if args.acf:
+        if not args.silent:
+            print("Estimating spectral noise ACF...")
+        acf = estimate_spectral_acf(data, N=args.noisechannels)
+        if not args.silent:
+            S = 1.0 + 2.0 * acf[1:].sum()
+            print("ACF: {}  (variance inflation S = {:.2f})"
+                  .format(np.array2string(acf, precision=3), S))
+
     # Define the threshold mask. This includes the spatial smoothing of the
     # data for create Frankenmasks.
 
@@ -497,19 +517,22 @@ def main():
         from .methods import collapse_zeroth
         moments = collapse_zeroth(velax=velax,
                                   data=masked_data,
-                                  rms=args.rms)
+                                  rms=args.rms,
+                                  acf=acf)
 
     elif args.method == 'first':
         from .methods import collapse_first
         moments = collapse_first(velax=velax,
                                  data=masked_data,
-                                 rms=args.rms)
+                                 rms=args.rms,
+                                 acf=acf)
 
     elif args.method == 'second':
         from .methods import collapse_second
         moments = collapse_second(velax=velax,
                                   data=masked_data,
-                                  rms=args.rms)
+                                  rms=args.rms,
+                                  acf=acf)
 
     elif args.method == 'eighth':
         from .methods import collapse_eighth
@@ -533,7 +556,8 @@ def main():
         from .methods import collapse_quadratic
         moments = collapse_quadratic(velax=velax,
                                      data=masked_data,
-                                     rms=args.rms)
+                                     rms=args.rms,
+                                     acf=acf)
         if args.clip is not None:
             temp = moments[2] / moments[3] >= max(args.clip)
             moments *= np.where(temp, 1.0, np.nan)[None, :, :]
@@ -542,7 +566,8 @@ def main():
         from .methods import collapse_width
         moments = collapse_width(velax=velax,
                                  data=masked_data,
-                                 rms=args.rms)
+                                 rms=args.rms,
+                                 acf=acf)
 
     elif args.method == 'percentiles':
         from .methods import collapse_percentiles
@@ -557,6 +582,7 @@ def main():
                                     data=masked_data,
                                     rms=args.rms,
                                     ncpu=args.processes,
+                                    acf=acf,
                                     mcmc=None)
 
     elif args.method == 'gaussthick':
@@ -566,6 +592,7 @@ def main():
                                       data=masked_data,
                                       rms=args.rms,
                                       ncpu=args.processes,
+                                      acf=acf,
                                       mcmc=None)
 
     elif args.method == 'gausshermite':
@@ -575,6 +602,7 @@ def main():
                                         data=masked_data,
                                         rms=args.rms,
                                         ncpu=args.processes,
+                                        acf=acf,
                                         mcmc=None)
 
     elif args.method == 'doublegauss':
@@ -584,6 +612,7 @@ def main():
                                        data=masked_data,
                                        rms=args.rms,
                                        ncpu=args.processes,
+                                       acf=acf,
                                        mcmc=None)
 
     else:
