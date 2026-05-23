@@ -103,7 +103,7 @@ def estimate_spectral_acf(data, N=5, max_lag=None):
     return np.array(acf)
 
 
-def build_spectral_covariance(rms, acf, nchan):
+def build_spectral_covariance(rms, acf, nchan, eps=1e-6):
     r"""
     Build the Toeplitz spectral noise covariance matrix,
 
@@ -114,13 +114,21 @@ def build_spectral_covariance(rms, acf, nchan):
     :func:`estimate_spectral_acf` and :math:`\sigma` is the per-channel RMS.
     Lags beyond ``len(acf) - 1`` are taken to be zero.
 
+    Truncated empirical ACFs need not yield a positive-definite Toeplitz
+    matrix (the implied spectral density can go negative at high frequency).
+    To guarantee a valid covariance suitable for Cholesky decomposition, the
+    eigenvalues are clipped at a small fraction ``eps`` of the spectral
+    radius before reconstruction.
+
     Args:
         rms (float): Per-channel RMS noise.
         acf (ndarray): 1D normalised ACF with ``acf[0] = 1``.
         nchan (int): Number of channels (size of the returned matrix).
+        eps (Optional[float]): Eigenvalue floor as a fraction of the largest
+            eigenvalue. Defaults to ``1e-6``.
 
     Returns:
-        ndarray: ``(nchan, nchan)`` symmetric positive-semidefinite covariance.
+        ndarray: ``(nchan, nchan)`` symmetric positive-definite covariance.
     """
     acf = np.asarray(acf, dtype=float)
     if acf.ndim != 1 or acf.size < 1 or acf[0] == 0:
@@ -130,7 +138,15 @@ def build_spectral_covariance(rms, acf, nchan):
     row[:n] = acf[:n] / acf[0]
     i = np.arange(nchan)
     lag = np.abs(i[:, None] - i[None, :])
-    return (rms ** 2) * np.where(lag < nchan, row[np.clip(lag, 0, nchan - 1)], 0.0)
+    C = (rms ** 2) * np.where(lag < nchan, row[np.clip(lag, 0, nchan - 1)], 0.0)
+
+    w, V = np.linalg.eigh(C)
+    floor = eps * w.max()
+    if w.min() < floor:
+        w = np.maximum(w, floor)
+        C = (V * w) @ V.T
+        C = 0.5 * (C + C.T)
+    return C
 
 
 def smooth_data(data, smooth=0, polyorder=0):

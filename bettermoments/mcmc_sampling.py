@@ -13,11 +13,12 @@ from .profiles import free_params
 _worker_state = {}
 
 
-def _pool_initializer(velax, data, rms, model_function, nparams, kwargs):
+def _pool_initializer(velax, data, rms, cov, model_function, nparams, kwargs):
     """Initialise each pool worker with shared read-only data."""
     _worker_state['velax'] = velax
     _worker_state['data'] = data
     _worker_state['rms'] = rms
+    _worker_state['cov'] = cov
     _worker_state['model_function'] = model_function
     _worker_state['nparams'] = nparams
     _worker_state['kwargs'] = kwargs
@@ -28,6 +29,7 @@ def _fit_pixel(idx):
     velax = _worker_state['velax']
     data = _worker_state['data']
     rms = _worker_state['rms']
+    cov = _worker_state['cov']
     model_function = _worker_state['model_function']
     nparams = _worker_state['nparams']
     kwargs = _worker_state['kwargs']
@@ -36,8 +38,14 @@ def _fit_pixel(idx):
     mask = np.logical_and(np.isfinite(y), y != 0.0)
     result = np.ones((2, nparams)) * np.nan
     if len(y[mask]) > nparams * 2:
+        cov_masked, cov_chol = None, None
+        if cov is not None:
+            from scipy.linalg import cholesky
+            cov_masked = cov[mask][:, mask]
+            cov_chol = cholesky(cov_masked, lower=True)
         result = fit_spectrum(velax[mask], y[mask], dy[mask],
-                              model_function, **kwargs)
+                              model_function, cov=cov_masked,
+                              cov_chol=cov_chol, **kwargs)
     return result
 
 
@@ -85,7 +93,7 @@ def parse_prior(p, prior):
         raise ValueError("Unknown prior type '{}'.".format(prior[-1]))
 
 
-def lnlike(params, x, y, dy, model_function):
+def lnlike(params, x, y, dy, model_function, cov_chol=None):
     """
     Evaluate the log-likelihood for the given parameters.
 
@@ -93,17 +101,25 @@ def lnlike(params, x, y, dy, model_function):
         params (array): Model parameter values.
         x (array): Velocity axis.
         y (array): Observed intensities.
-        dy (array): Uncertainties on the observed intensities.
+        dy (array): Uncertainties on the observed intensities. Ignored when
+            ``cov_chol`` is provided.
         model_function (callable): The model function to evaluate.
+        cov_chol (Optional[ndarray]): Lower-triangular Cholesky factor of the
+            spectral noise covariance ``C = L L^T``. When provided, the
+            log-likelihood becomes ``-0.5 * ||L^{-1} (y - y_mod)||^2``.
 
     Returns:
         float: Log-likelihood value.
     """
-    y_mod = model_function(x, *params)
-    return -0.5 * np.sum(((y - y_mod) / dy)**2)
+    r = y - model_function(x, *params)
+    if cov_chol is None:
+        return -0.5 * np.sum((r / dy)**2)
+    from scipy.linalg import solve_triangular
+    u = solve_triangular(cov_chol, r, lower=True)
+    return -0.5 * np.sum(u**2)
 
 
-def lnpost(params, x, y, dy, priors, model_function):
+def lnpost(params, x, y, dy, priors, model_function, cov_chol=None):
     """
     Evaluate the log-posterior probability for the given parameters.
 
@@ -111,9 +127,12 @@ def lnpost(params, x, y, dy, priors, model_function):
         params (array): Model parameter values.
         x (array): Velocity axis.
         y (array): Observed intensities.
-        dy (array): Uncertainties on the observed intensities.
+        dy (array): Uncertainties on the observed intensities. Ignored when
+            ``cov_chol`` is provided.
         priors (list): List of prior specifications (see ``lnprior``).
         model_function (callable): The model function to evaluate.
+        cov_chol (Optional[ndarray]): Lower-triangular Cholesky factor of the
+            spectral noise covariance — see :func:`lnlike`.
 
     Returns:
         float: Log-posterior probability.
@@ -121,13 +140,14 @@ def lnpost(params, x, y, dy, priors, model_function):
     lnp = lnprior(params, priors)
     if ~np.isfinite(lnp):
         return lnp
-    return lnp + lnlike(params, x, y, dy, model_function)
+    return lnp + lnlike(params, x, y, dy, model_function, cov_chol=cov_chol)
 
 
 # -- Sampling Functions -- #
 
 
-def fit_cube(velax, data, rms, model_function, indices=None, ncpu=1, **kwargs):
+def fit_cube(velax, data, rms, model_function, indices=None, ncpu=1,
+             acf=None, **kwargs):
     """
     Fit each spectrum in ``indices`` using ``model_function``. Spectra with
     fewer finite values than twice the number of free parameters are skipped.
@@ -172,7 +192,11 @@ def fit_cube(velax, data, rms, model_function, indices=None, ncpu=1, **kwargs):
 
     # Fit each pixel, parallelising across workers when ncpu > 1.
 
-    initargs = (velax, data, rms, model_function, nparams, kwargs)
+    cov = None
+    if acf is not None:
+        from .collapse_cube import build_spectral_covariance
+        cov = build_spectral_covariance(rms=rms, acf=acf, nchan=velax.size)
+    initargs = (velax, data, rms, cov, model_function, nparams, kwargs)
     if ncpu == 1:
         _pool_initializer(*initargs)
         fits = list(tqdm(map(_fit_pixel, indices), total=len(indices)))
@@ -187,7 +211,8 @@ def fit_cube(velax, data, rms, model_function, indices=None, ncpu=1, **kwargs):
 
 def fit_spectrum(x, y, dy, model_function, p0=None, priors=None, nwalkers=None,
                  nburnin=500, nsteps=500, mcmc='emcee', scatter=1e-3,
-                 niter=1, returns='default', plots=False, **kwargs):
+                 niter=1, returns='default', plots=False, cov=None,
+                 cov_chol=None, **kwargs):
     """
     Fit the provided spectrum with ``model_function``. If ``mcmc`` is not
     specified, the results of the ``scipy.optimize.curve_fit`` optimization
@@ -233,7 +258,7 @@ def fit_spectrum(x, y, dy, model_function, p0=None, priors=None, nwalkers=None,
 
     # Try a parameter optimization.
 
-    p0, cvar = optimize_p0(x, y, dy, model_function, p0)
+    p0, cvar = optimize_p0(x, y, dy, model_function, p0, cov=cov)
     if mcmc is None:
         return p0, cvar
 
@@ -242,7 +267,8 @@ def fit_spectrum(x, y, dy, model_function, p0=None, priors=None, nwalkers=None,
     priors = default_priors(x, y, model_function) if priors is None else priors
     for _ in range(niter):
         sampler = run_sampler(x, y, dy, p0, priors, model_function, nwalkers,
-                              nburnin, nsteps, mcmc, scatter, **kwargs)
+                              nburnin, nsteps, mcmc, scatter,
+                              cov_chol=cov_chol, **kwargs)
         samples = sampler.get_chain(discard=nburnin, flat=True)
         p0 = np.median(samples, axis=0)
 
@@ -268,7 +294,7 @@ def fit_spectrum(x, y, dy, model_function, p0=None, priors=None, nwalkers=None,
 
 def run_sampler(x, y, dy, p0, priors, model_function, nwalkers=None,
                 nburnin=500, nsteps=500, mcmc='emcee', scatter=1e-3,
-                **kwargs):
+                cov_chol=None, **kwargs):
     """
     Build and run the MCMC ensemble sampler.
 
@@ -310,11 +336,13 @@ def run_sampler(x, y, dy, p0, priors, model_function, nwalkers=None,
     moves = kwargs.pop('moves', None)
     pool = kwargs.pop('pool', None)
     args = [x, y, dy, priors, import_function(model_function)]
+    sampler_kwargs = {'cov_chol': cov_chol} if cov_chol is not None else None
 
     # Build, run and return the EnsembleSampler.
 
     sampler = EnsembleSampler(nwalkers, p0.shape[1], lnpost,
-                              args=args, moves=moves, pool=pool)
+                              args=args, kwargs=sampler_kwargs,
+                              moves=moves, pool=pool)
     sampler.run_mcmc(p0, nburnin+nsteps, progress=progress,
                      skip_initial_state_check=True, **kwargs)
     return sampler
@@ -358,7 +386,7 @@ def estimate_p0(x, y, model_function):
     return p0
 
 
-def optimize_p0(x, y, dy, model_function, p0, **kwargs):
+def optimize_p0(x, y, dy, model_function, p0, cov=None, **kwargs):
     """
     Optimize starting parameters using ``scipy.optimize.curve_fit``.
 
@@ -377,7 +405,8 @@ def optimize_p0(x, y, dy, model_function, p0, **kwargs):
     model_function = import_function(model_function)
     try:
         kwargs['maxfev'] = kwargs.pop('maxfev', 10000)
-        p0, cvar = curve_fit(model_function, x, y, sigma=dy, p0=p0, **kwargs)
+        sigma = cov if cov is not None else dy
+        p0, cvar = curve_fit(model_function, x, y, sigma=sigma, p0=p0, **kwargs)
         cvar = np.diag(cvar)**0.5
     except RuntimeError:
         cvar = np.ones(len(p0)) * np.nan

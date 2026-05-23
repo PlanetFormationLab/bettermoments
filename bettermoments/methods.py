@@ -362,7 +362,8 @@ def collapse_percentiles(velax, data, rms):
 
     return wp50, dwp50, wpdVb, dwpdVb, wpdVr, dwpdVr, wp1684, dwp1684
 
-def collapse_gaussian(velax, data, rms, indices=None, ncpu=1, **kwargs):
+def collapse_gaussian(velax, data, rms, indices=None, ncpu=1, acf=None,
+                      **kwargs):
     r"""
     Collapse the cube by fitting a Gaussian line profile to each pixel. This
     function is a wrapper of `collapse_analytical` which provides more
@@ -386,10 +387,11 @@ def collapse_gaussian(velax, data, rms, indices=None, ncpu=1, **kwargs):
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gaussian', indices=indices,
-                               ncpu=ncpu, **kwargs)
+                               ncpu=ncpu, acf=acf, **kwargs)
 
 
-def collapse_gaussthick(velax, data, rms, indices=None, ncpu=1, **kwargs):
+def collapse_gaussthick(velax, data, rms, indices=None, ncpu=1, acf=None,
+                        **kwargs):
     r"""
     Collapse the cube by fitting a Gaussian line profile with an optically
     thick core to each pixel. This function is a wrapper of
@@ -414,10 +416,11 @@ def collapse_gaussthick(velax, data, rms, indices=None, ncpu=1, **kwargs):
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gaussthick', indices=indices,
-                               ncpu=ncpu, **kwargs)
+                               ncpu=ncpu, acf=acf, **kwargs)
 
 
-def collapse_gausshermite(velax, data, rms, indices=None, ncpu=1, **kwargs):
+def collapse_gausshermite(velax, data, rms, indices=None, ncpu=1, acf=None,
+                          **kwargs):
     r"""
     Collapse the cube by fitting a Gaussian line profile with an optically
     thick core to each pixel. This function is a wrapper of
@@ -443,10 +446,11 @@ def collapse_gausshermite(velax, data, rms, indices=None, ncpu=1, **kwargs):
     """
     return collapse_analytical(velax=velax, data=data, rms=rms,
                                model_function='gausshermite', indices=indices,
-                               ncpu=ncpu, **kwargs)
+                               ncpu=ncpu, acf=acf, **kwargs)
 
 
-def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, **kwargs):
+def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, acf=None,
+                         **kwargs):
     r"""
     Collapse the cube by fitting two Gaussian line profiles to each pixel.
     The first Gaussian component will be the peak of the two components.
@@ -473,7 +477,7 @@ def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, **kwargs):
     """
     p = collapse_analytical(velax=velax, data=data, rms=rms,
                             model_function='doublegauss', indices=indices,
-                            ncpu=ncpu, **kwargs)
+                            ncpu=ncpu, acf=acf, **kwargs)
     idx = np.argmax(p[2::6], axis=0)
     pf = [np.where(idx, p[i+6], p[i]) for i in range(6)]
     pb = [np.where(idx, p[i], p[i+6]) for i in range(6)]
@@ -481,7 +485,7 @@ def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, **kwargs):
     
 
 def collapse_analytical(velax, data, rms, model_function, indices=None,
-                        ncpu=1, **kwargs):
+                        ncpu=1, acf=None, **kwargs):
     r"""
     Collapse the cube by fitting an analytical form to each pixel, including
     the option to use an MCMC sampler which has been found to be more forgiving
@@ -523,7 +527,7 @@ def collapse_analytical(velax, data, rms, model_function, indices=None,
     # Fit each pixel, distributing work evenly across ncpu workers.
 
     results = fit_cube(velax, data, rms, model_function, indices,
-                       ncpu=ncpu, **kwargs)
+                       ncpu=ncpu, acf=acf, **kwargs)
     results = results.reshape(results.shape[0], -1)
 
     # Populate arrays with results and return.
