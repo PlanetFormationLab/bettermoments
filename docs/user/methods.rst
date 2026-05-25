@@ -16,6 +16,17 @@ and ``Fnu`` represent the line center, width and peak, respectively.
     The convolution for ``smooththreshold`` is currently experimental and is
     work in progress. If things look suspicious, please raise an issue.
 
+.. note::
+    Most ``collapse_*`` functions accept an optional ``acf`` keyword. When
+    supplied, the uncertainty maps are propagated through the full spectral
+    noise covariance :math:`C_{ij} = \sigma^2 \, \rho(|i - j|)` rather than
+    its diagonal, correctly accounting for channel-to-channel noise
+    correlation (e.g. from Hanning smoothing in the imaging pipeline). The
+    ACF can be estimated directly from the cube with
+    :func:`bettermoments.estimate_spectral_acf`, or enabled from the command
+    line with the ``--acf`` flag. Only the uncertainty maps are affected — the
+    moment values themselves are unchanged.
+
 
 
 Moment Maps

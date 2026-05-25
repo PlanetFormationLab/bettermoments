@@ -26,6 +26,18 @@ Pre-processing & Masking
 
 .. autofunction:: bettermoments.collapse_cube.get_combined_mask
 
+Spectral Noise Correlation
+--------------------------
+
+Tools for handling spectrally correlated noise (e.g.\ from Hanning smoothing
+in the imaging pipeline). These underpin the ``--acf`` command-line flag and
+the ``acf=`` keyword on the ``collapse_*`` functions, and can also be used
+directly when building custom workflows.
+
+.. autofunction:: bettermoments.collapse_cube.estimate_spectral_acf
+
+.. autofunction:: bettermoments.collapse_cube.build_spectral_covariance
+
 Utilities
 ---------
 

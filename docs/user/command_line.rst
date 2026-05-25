@@ -157,6 +157,46 @@ It is often useful to have a copy of the mask used to generate the moment map
 such that you can overplot it in channel maps to help make sense of what you're
 seeing. To do this, use the ``--returnmask`` flag.
 
+Correlated Noise (ACF)
+----------------------
+
+By default ``bettermoments`` assumes that the noise in adjacent spectral
+channels is independent. For real interferometric cubes this is rarely true:
+the imaging pipeline typically applies some form of spectral smoothing
+(e.g. Hanning) which correlates the noise between neighbouring channels. When
+that happens the diagonal-only uncertainty under-estimates the true error,
+because variance from correlated channels accumulates rather than averages
+down.
+
+The ``--acf`` flag accounts for this by estimating the normalised spectral
+autocorrelation function (ACF) of the noise from off-source pixels and
+propagating the uncertainty through the full Toeplitz covariance
+:math:`C_{ij} = \sigma^2 \, \rho(|i - j|)` rather than just its diagonal,
+
+.. code-block:: bash
+
+    bettermoments path/to/cube.fits -method zeroth --acf
+
+The ACF is estimated from pixels whose peak absolute intensity across the
+spectral axis is below ``2 * rms`` — i.e. clearly off-source sightlines — and
+is truncated at the first lag that falls inside the white-noise band
+:math:`\pm 2 / \sqrt{N_{\rm chan}}`. The estimated ACF and the corresponding
+variance inflation :math:`S = 1 + 2 \sum_{\tau > 0} \rho(\tau)` are printed to
+the terminal so you can sanity-check the result.
+
+The ``--acf`` flag is currently supported by ``zeroth``, ``first``,
+``second``, ``quadratic``, ``width``, ``gaussian``, ``gaussthick``,
+``gausshermite``, and ``doublegauss``. Only the uncertainty maps change; the
+moment values themselves are unaffected.
+
+.. note::
+
+    ACF estimation needs enough off-source spectra to give a stable estimate.
+    For cubes where the line fills most of the spatial extent, the
+    automatically-selected sample may be small — inspect the printed ACF and,
+    if needed, estimate it externally with
+    :func:`bettermoments.estimate_spectral_acf` on a more appropriate region.
+
 Help
 ----
 

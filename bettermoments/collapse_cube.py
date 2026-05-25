@@ -38,29 +38,40 @@ def estimate_RMS(data, N=5):
     return rms
 
 
-def estimate_spectral_acf(data, N=5, max_lag=None):
+def estimate_spectral_acf(data, N=5, max_lag=None, rms=None, threshold=2.0):
     r"""
     Estimate the normalised spectral autocorrelation function (ACF) of the
-    noise from the first and last ``N`` channels of the cube, using the same
-    central-50% spatial extent as :func:`estimate_RMS`.
+    noise from off-source spatial pixels, using the full spectral axis.
 
-    Each line-free spectrum (one per spatial pixel in the central region) is
-    mean-subtracted and used to form the biased ACF estimator,
+    Off-source pixels are identified as those whose peak absolute intensity
+    across all channels is below ``threshold * rms``. Each such full-length
+    spectrum is mean-subtracted and used to form the biased ACF estimator,
 
     .. math::
         \hat{\rho}(\tau) = \frac{\sum_{i} n_i n_{i+\tau}}{\sum_{i} n_i^2},
 
-    averaged across all such spectra. The returned ACF is truncated at the
+    averaged across all selected pixels. The returned ACF is truncated at the
     first lag at which it falls within the white-noise band
     :math:`\pm 2/\sqrt{N_{\rm chan}}`, where :math:`N_{\rm chan}` is the number
-    of line-free channels used per spectrum. ``acf[0]`` is always 1.
+    of channels per spectrum. ``acf[0]`` is always 1.
+
+    Note that with ``threshold = 2`` a fraction of true noise-only sightlines
+    will be rejected (the maximum of ``N_chan`` Gaussian draws routinely
+    exceeds 2 sigma), so the selection is conservative: it favours including
+    only clearly off-source pixels at the cost of sample size, which is fine
+    for a first-order ACF estimate.
 
     Args:
         data (ndarray): 3D data cube with the spectral axis first.
-        N (Optional[int]): Number of channels at each end of the cube to use
-            as the line-free sample. Defaults to ``5``.
+        N (Optional[int]): Number of channels at each end of the cube used to
+            estimate ``rms`` when one is not supplied. Defaults to ``5``.
         max_lag (Optional[int]): Hard cap on the maximum lag returned. If
-            ``None``, defaults to ``N - 1``.
+            ``None``, defaults to ``N_chan - 1``.
+        rms (Optional[float]): Per-channel RMS used to define the off-source
+            threshold. If ``None``, estimated via :func:`estimate_RMS`.
+        threshold (Optional[float]): Pixels with peak ``|intensity| <
+            threshold * rms`` across all channels are treated as off-source.
+            Defaults to ``2.0``.
 
     Returns:
         ndarray: 1D array of normalised ACF values, ``acf[0] = 1``, length
@@ -69,22 +80,26 @@ def estimate_spectral_acf(data, N=5, max_lag=None):
     N = int(N)
     if N < 2:
         raise ValueError("`N` must be at least 2 to estimate an ACF.")
-    x1, x2 = np.percentile(np.arange(data.shape[2]), [25, 75])
-    y1, y2 = np.percentile(np.arange(data.shape[1]), [25, 75])
-    x1, x2, y1, y2 = int(x1), int(x2), int(y1), int(y2)
+    if rms is None:
+        rms = estimate_RMS(data, N=N)
+    if not np.isfinite(rms) or rms <= 0:
+        raise ValueError("`rms` must be a positive, finite number.")
 
-    # Stack the line-free channels at each end into one (2N, ny, nx) block
-    # and flatten the spatial dims to a (2N, npix) matrix of noise spectra.
-    noise = np.concatenate([data[:N, y1:y2, x1:x2],
-                            data[-N:, y1:y2, x1:x2]], axis=0)
-    nchan = noise.shape[0]
-    noise = noise.reshape(nchan, -1)
-    noise = noise[:, np.all(np.isfinite(noise), axis=0)]
-    if noise.shape[1] == 0:
-        raise ValueError("No finite line-free spectra found for ACF estimate.")
+    peak = np.nanmax(np.abs(data), axis=0)
+    offsource = np.isfinite(peak) & (peak < threshold * rms)
+    if not offsource.any():
+        raise ValueError(
+            "No off-source pixels found at threshold {:.1f} * rms; "
+            "try increasing `threshold`.".format(threshold))
 
-    noise = noise - noise.mean(axis=0, keepdims=True)
-    var = np.sum(noise * noise, axis=0)
+    spectra = data[:, offsource]
+    spectra = spectra[:, np.all(np.isfinite(spectra), axis=0)]
+    if spectra.shape[1] == 0:
+        raise ValueError("No finite off-source spectra found for ACF estimate.")
+    nchan = spectra.shape[0]
+
+    spectra = spectra - spectra.mean(axis=0, keepdims=True)
+    var = np.sum(spectra * spectra, axis=0)
 
     if max_lag is None:
         max_lag = nchan - 1
@@ -93,7 +108,7 @@ def estimate_spectral_acf(data, N=5, max_lag=None):
 
     acf = [1.0]
     for tau in range(1, max_lag + 1):
-        cov = np.sum(noise[:-tau] * noise[tau:], axis=0)
+        cov = np.sum(spectra[:-tau] * spectra[tau:], axis=0)
         rho = np.mean(cov / np.where(var > 0, var, np.nan))
         if not np.isfinite(rho):
             break
@@ -371,10 +386,11 @@ def main():
                         help='Stokes channel to use.')
     parser.add_argument('--acf', action='store_true',
                         help='Account for spectrally correlated noise: '
-                             'auto-estimate the noise ACF from line-free '
-                             'channels and propagate uncertainties through '
-                             'the full covariance. Supported by zeroth, '
-                             'first, second, quadratic, width, gaussian, '
+                             'auto-estimate the noise ACF from off-source '
+                             'pixels (peak |intensity| < 2 * rms) and '
+                             'propagate uncertainties through the full '
+                             'covariance. Supported by zeroth, first, '
+                             'second, quadratic, width, gaussian, '
                              'gaussthick, gausshermite, doublegauss.')
     parser.add_argument('--debug', action='store_true',
                         help='Return all intermediate products to help debug.')
@@ -466,7 +482,7 @@ def main():
     if args.acf:
         if not args.silent:
             print("Estimating spectral noise ACF...")
-        acf = estimate_spectral_acf(data, N=args.noisechannels)
+        acf = estimate_spectral_acf(data, N=args.noisechannels, rms=args.rms)
         if not args.silent:
             S = 1.0 + 2.0 * acf[1:].sum()
             print("ACF: {}  (variance inflation S = {:.2f})"
