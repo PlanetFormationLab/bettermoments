@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: >-
+  If you use bettermoments in your research, please cite both
+  Teague & Foreman-Mackey (2018) and the Zenodo record.
+title: bettermoments
+authors:
+  - family-names: Teague
+    given-names: Richard
+    email: rteague@mit.edu
+  - family-names: Foreman-Mackey
+    given-names: Daniel
+doi: 10.5281/zenodo.1419754
+repository-code: https://github.com/PlanetFormationLab/bettermoments
+url: https://bettermoments.readthedocs.io
+license: MIT
+preferred-citation:
+  type: article
+  title: A Robust Method to Measure Centroids of Spectral Lines
+  authors:
+    - family-names: Teague
+      given-names: Richard
+    - family-names: Foreman-Mackey
+      given-names: Daniel
+  journal: Research Notes of the AAS
+  volume: 2
+  issue: 3
+  year: 2018
+  doi: 10.3847/2515-5172/aae265

@@ -10,11 +10,6 @@ import argparse
 import numpy as np
 import multiprocessing
 
-# -- SUPPRESS WARNINGS -- #
-
-import warnings
-warnings.filterwarnings("ignore")
-
 # -- DATA MANIPULATION -- #
 
 
@@ -31,9 +26,14 @@ def estimate_RMS(data, N=5):
     Returns:
         float: Estimated RMS noise level.
     """
+    N = int(N)
+    if 2 * N > data.shape[0]:
+        raise ValueError("Cannot use N={} noise channels at each end of a "
+                         "cube with only {} channels; the windows would "
+                         "overlap.".format(N, data.shape[0]))
     x1, x2 = np.percentile(np.arange(data.shape[2]), [25, 75])
     y1, y2 = np.percentile(np.arange(data.shape[1]), [25, 75])
-    x1, x2, y1, y2, N = int(x1), int(x2), int(y1), int(y2), int(N)
+    x1, x2, y1, y2 = int(x1), int(x2), int(y1), int(y2)
     rms = np.nanstd([data[:N, y1:y2, x1:x2], data[-N:, y1:y2, x1:x2]])
     return rms
 
@@ -101,6 +101,18 @@ def estimate_spectral_acf(data, N=5, max_lag=None, rms=None, threshold=2.0):
     spectra = spectra - spectra.mean(axis=0, keepdims=True)
     var = np.sum(spectra * spectra, axis=0)
 
+    # Exclude blank spectra: NaN-padded pixels (e.g. primary-beam cutoffs in
+    # CASA cubes) are filled with zeros on load, pass the off-source test and
+    # have zero variance, which would otherwise poison the mean ACF.
+
+    blank = var <= 0
+    if blank.any():
+        spectra = spectra[:, ~blank]
+        var = var[~blank]
+    if spectra.shape[1] == 0:
+        raise ValueError("All off-source spectra are blank (zero variance); "
+                         "cannot estimate the noise ACF.")
+
     if max_lag is None:
         max_lag = nchan - 1
     max_lag = int(min(max_lag, nchan - 1))
@@ -108,8 +120,7 @@ def estimate_spectral_acf(data, N=5, max_lag=None, rms=None, threshold=2.0):
 
     acf = [1.0]
     for tau in range(1, max_lag + 1):
-        cov = np.sum(spectra[:-tau] * spectra[tau:], axis=0)
-        rho = np.mean(cov / np.where(var > 0, var, np.nan))
+        rho = np.mean(np.sum(spectra[:-tau] * spectra[tau:], axis=0) / var)
         if not np.isfinite(rho):
             break
         acf.append(float(rho))
@@ -227,9 +238,13 @@ def get_channel_mask(data, firstchannel=0, lastchannel=-1, user_mask=None):
     """
     channels = np.arange(data.shape[0])
     channel_mask = np.ones(data.shape[0]) if user_mask is None else user_mask
-    assert channel_mask.shape == channels.shape
+    if channel_mask.shape != channels.shape:
+        raise ValueError("`user_mask` must be 1D with size data.shape[0].")
     lastchannel = channels[lastchannel] if lastchannel < 0 else lastchannel
-    assert 0 <= firstchannel < lastchannel <= data.shape[0]
+    if not 0 <= firstchannel <= lastchannel < data.shape[0]:
+        raise ValueError("Invalid channel range: firstchannel={}, "
+                         "lastchannel={} for a cube with {} channels."
+                         .format(firstchannel, lastchannel, data.shape[0]))
     channel_mask = np.where(channels >= firstchannel, channel_mask, 0)
     channel_mask = np.where(channels <= lastchannel, channel_mask, 0)
     return np.where(channel_mask[:, None, None], np.ones(data.shape), 0.0)
@@ -259,7 +274,7 @@ def get_user_mask(data, user_mask_path=None):
 
 def get_threshold_mask(data, clip=None, rms=None, smooth_threshold_mask=0,
                        noise_channels=5):
-    """
+    r"""
     Returns a mask based on a sigma-clip to the input data. The most standard
     approach would be to use ``clip=3`` to mask out all pixels with intensities
     :math:`|I| \leq 3\sigma`. If you wanted to specify an asymmetric criteria
@@ -276,8 +291,9 @@ def get_threshold_mask(data, clip=None, rms=None, smooth_threshold_mask=0,
         rms (optional[float]): The RMS level to use for defining the noise. If
             not specified, will calculate it based on the standard deviation of
             the data.
-        smooth_threshold_mask (optional[float]): Convolution kernel FWHM in
-            pixels.
+        smooth_threshold_mask (optional[float]): FWHM of the spatial Gaussian
+            convolution kernel in [pixels] applied to the data before
+            thresholding.
         noise_channels (optional[int]): Number of channels at the start and end
             of the velocity axis to use for estimating the noise.
 
@@ -293,18 +309,22 @@ def get_threshold_mask(data, clip=None, rms=None, smooth_threshold_mask=0,
     # Define the clippng range.
 
     clip = np.atleast_1d(clip)
+    if clip.size == 0 or clip.size > 2:
+        raise ValueError("`clip` must contain one or two values.")
     clip = np.array([-clip[0], clip[0]]) if clip.size == 1 else clip
-    assert np.all(clip != 0.0), "Use `clip=None` to not use a threshold mask."
+    if np.any(clip == 0.0):
+        raise ValueError("Use `clip=None` to not use a threshold mask.")
 
     # If we are making a Frankenmask, we must first smooth the cube to both
     # lower the background noise and extend the range of the real emission.
     # After the smoothing, we devide through by the RMS to generate a SNR mask.
 
-    assert smooth_threshold_mask >= 0.0
+    if smooth_threshold_mask < 0.0:
+        raise ValueError("`smooth_threshold_mask` must be non-negative.")
     if smooth_threshold_mask > 0.0:
         from scipy.ndimage import gaussian_filter
-        SNR = [gaussian_filter(c, sigma=smooth_threshold_mask) for c in data]
-        SNR = np.array(SNR)
+        sigma = smooth_threshold_mask / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+        SNR = np.array([gaussian_filter(c, sigma=sigma) for c in data])
     else:
         SNR = data.copy()
 
@@ -367,6 +387,10 @@ def main():
     parser.add_argument('-mask', default=None,
                         help='Path to the mask FITS cube.')
     parser.add_argument('-method', default='quadratic',
+                        choices=['zeroth', 'first', 'second', 'eighth',
+                                 'ninth', 'maximum', 'quadratic', 'width',
+                                 'percentiles', 'gaussian', 'gaussthick',
+                                 'gausshermite', 'doublegauss'],
                         help='Method used to collapse cube.')
     parser.add_argument('-noisechannels', default=5, type=int,
                         help='Number of end channels to use to estimate RMS.')
@@ -381,7 +405,8 @@ def main():
     parser.add_argument('-smooth', default=0, type=int,
                         help='Width of filter to smooth spectrally.')
     parser.add_argument('-smooththreshold', default=0.0, type=float,
-                        help='Kernel in beam FWHM to smooth threshold map.')
+                        help='FWHM in pixels of the spatial Gaussian kernel '
+                             'used to smooth the data for the threshold mask.')
     parser.add_argument('-stokes', default=0, type=int,
                         help='Stokes channel to use.')
     parser.add_argument('--acf', action='store_true',
@@ -395,6 +420,7 @@ def main():
     parser.add_argument('--debug', action='store_true',
                         help='Return all intermediate products to help debug.')
     parser.add_argument('--nooverwrite', action='store_false',
+                        dest='overwrite',
                         help='Do not overwrite files.')
     parser.add_argument('--returnmask', action='store_true',
                         help='Return the masked used as a FITS file.')
@@ -408,13 +434,19 @@ def main():
     # Check they all make sense.
 
     if args.noisechannels < 1:
-        raise ValueError("`noisechannels` must an integer greater than 1.")
+        raise ValueError("`noisechannels` must be an integer of at least 1.")
 
     args.combine = args.combine.lower()
     if args.combine not in ['and', 'or']:
         raise ValueError("`combine` must be `and` or `or`.")
 
-    if not args.silent:
+    if args.acf and args.method in ['eighth', 'ninth', 'maximum',
+                                    'percentiles']:
+        raise ValueError("`--acf` is not supported for -method '{}'; the "
+                         "uncertainties would not be corrected."
+                         .format(args.method))
+
+    if args.silent:
         import warnings
         warnings.filterwarnings("ignore")
 
@@ -642,7 +674,7 @@ def main():
     moments = check_finite_errors(moments)
 
     # Save as FITS files.
-    
+
     if not args.silent:
         print("Saving moment maps...")
     from .io import save_to_FITS
@@ -650,7 +682,7 @@ def main():
                  method=args.method,
                  path=args.path,
                  outname=args.outname,
-                 overwrite=args.nooverwrite)
+                 overwrite=args.overwrite)
 
     # If applicable, build a model cube from the decomposition.
 

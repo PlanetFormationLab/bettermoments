@@ -38,6 +38,12 @@ while various other methods, discussed further in the documentation, can be acce
 bettermoments path/to/cube.fits -method zeroth
 ```
 
+Since v1.10.0, ``bettermoments`` can also account for spectrally correlated noise (e.g. from Hanning smoothing) when calculating uncertainties. Add the ``--acf`` flag to estimate the noise autocorrelation function from off-source pixels and propagate it through the full spectral covariance:
+
+```bash
+bettermoments path/to/cube.fits -method zeroth --acf
+```
+
 A quick
 
 ```bash

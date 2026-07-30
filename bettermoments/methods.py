@@ -4,6 +4,14 @@ All the methods used for collapsing the cube.
 
 import numpy as np
 
+__all__ = ['collapse_zeroth', 'collapse_first', 'collapse_second',
+           'collapse_eighth', 'collapse_ninth', 'collapse_maximum',
+           'collapse_quadratic', 'collapse_width', 'collapse_percentiles',
+           'collapse_gaussian', 'collapse_gaussthick', 'collapse_gausshermite',
+           'collapse_doublegauss', 'collapse_analytical',
+           'available_collapse_methods', 'collapse_method_products',
+           'check_finite_errors']
+
 
 # -- CORRELATED NOISE PROPAGATION -- #
 
@@ -46,9 +54,9 @@ def collapse_zeroth(velax, data, rms, acf=None):
     and
 
     .. math::
-        M_0 = \sqrt{\sum_{i\,(I_i > 0)}^N \sigma_i^2 \cdot \Delta v_{{\rm chan},\,i}^2}
+        \delta M_0 = \sqrt{\sum_{i\,(I_i > 0)}^N \sigma_i^2 \cdot \Delta v_{{\rm chan},\,i}^2}
 
-    where :math:`\Delta v_i` and :math:`I_i` are the chanenl width and flux
+    where :math:`\Delta v_i` and :math:`I_i` are the channel width and flux
     density at the :math:`i^{\rm th}` channel, respectively and the sum goes
     over the whole ``axis``.
 
@@ -76,7 +84,7 @@ def collapse_zeroth(velax, data, rms, acf=None):
     """
     chan = abs(np.diff(velax).mean())
     npix = np.sum(data != 0.0, axis=0)
-    M0 = np.trapezoid(data, dx=chan, axis=0)
+    M0 = np.sum(data, axis=0) * chan
     if acf is None:
         dM0 = chan * rms * npix**0.5 * np.ones(M0.shape)
     else:
@@ -134,10 +142,13 @@ def collapse_first(velax, data, rms, acf=None):
     vpix = chan * np.arange(data.shape[0]) + velax[0]
     vpix = vpix[:, None, None] * np.ones(data.shape)
 
-    weights = 1e-10 * np.random.rand(data.size).reshape(data.shape)
-    weights = np.where(data != 0.0, abs(data), weights)
+    weights = np.where(data != 0.0, abs(data), 1e-10)
     M1 = np.average(vpix, weights=weights, axis=0)
-    g = (vpix - M1[None, :, :]) / np.sum(weights, axis=0)
+
+    # Sensitivity of M1 to the intensity in each channel: zero for masked
+    # channels, and carrying the sign of the data from the |I| weighting.
+
+    g = np.sign(data) * (vpix - M1[None, :, :]) / np.sum(weights, axis=0)
     if acf is None:
         dM1 = np.sqrt(np.sum((g * rms)**2, axis=0))
     else:
@@ -197,19 +208,25 @@ def collapse_second(velax, data, rms, acf=None):
     vpix = chan * np.arange(data.shape[0]) + velax[0]
     vpix = vpix[:, None, None] * np.ones(data.shape)
 
-    weights = 1e-10 * np.random.rand(data.size).reshape(data.shape)
-    weights = np.where(data != 0.0, abs(data), weights)
+    weights = np.where(data != 0.0, abs(data), 1e-10)
 
     M1 = collapse_first(velax=velax, data=data, rms=rms)[0]
     M1 = M1[None, :, :] * np.ones(data.shape)
     M2 = np.sum(weights * (vpix - M1)**2, axis=0) / np.sum(weights, axis=0)
     M2 = np.sqrt(M2)
 
-    g = ((vpix - M1)**2 - M2**2) / (2.0 * M2 * np.sum(weights, axis=0))
+    # Sensitivity of M2 to the intensity in each channel: zero for masked
+    # channels, and carrying the sign of the data from the |I| weighting.
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        g = np.sign(data) * ((vpix - M1)**2 - M2**2)
+        g = g / (2.0 * M2 * np.sum(weights, axis=0))
+    g = np.where(np.isfinite(g), g, 0.0)
     if acf is None:
         dM2 = np.sqrt(np.sum((g * rms)**2, axis=0))
     else:
         dM2 = _propagate_covariance(g, rms, acf)
+    dM2 = np.where(M2 > 0.0, dM2, np.nan)
 
     npix = np.sum(data != 0.0, axis=0)
     M2 = np.where(npix >= 1.0, M2, np.nan)
@@ -241,10 +258,8 @@ def collapse_eighth(velax, data, rms):
             The peak value, ``M8``, and the associated uncertainty, ``dM8``.
     """
     M8 = np.max(data, axis=0)
-    loc = np.where(np.max(data, axis=0)==0)
-    M8[loc] = np.nan
-    dM8 = rms * np.ones(M8.shape)
     mask = M8 != 0.0
+    dM8 = rms * np.ones(M8.shape)
     return np.where(mask, M8, np.nan), np.where(mask, dM8, np.nan)
 
 
@@ -264,11 +279,9 @@ def collapse_ninth(velax, data, rms):
             The velocity value of the peak value, ``M9``, and the associated
             uncertainty, ``dM9``.
     """
-    M9 = velax[np.argmax(data, axis=0)]
-    loc = np.where(np.max(data, axis=0)==0)
-    M9[loc] = np.nan
-    dM9 = 0.5 * abs(np.diff(velax).mean()) * np.ones(M9.shape)
+    M9 = velax[np.argmax(data, axis=0)].astype(float)
     mask = np.max(data, axis=0) != 0.0
+    dM9 = 0.5 * abs(np.diff(velax).mean()) * np.ones(M9.shape)
     return np.where(mask, M9, np.nan), np.where(mask, dM9, np.nan)
 
 
@@ -301,7 +314,7 @@ def collapse_percentiles(velax, data, rms):
     # Normalized cumulative sum along velocity axis.
 
     weights = np.cumsum(np.clip(data, a_min=0.0, a_max=None), axis=0)
-    total = weights[-1]
+    total = weights[-1].copy()
     valid = total > 0.0
     weights[:, valid] /= total[valid]
 
@@ -311,6 +324,7 @@ def collapse_percentiles(velax, data, rms):
     wv = weights.reshape(nv, -1).T          # (npix, nv)
     valid_flat = valid.ravel()
     wv = wv[valid_flat]                     # (n_valid, nv)
+    total_valid = total.ravel()[valid_flat]
     n_valid = wv.shape[0]
     i_arr = np.arange(n_valid)
 
@@ -339,7 +353,15 @@ def collapse_percentiles(velax, data, rms):
         dwgt = np.where(at_lo, wv[i_arr, 1] - wv[i_arr, 0],
                np.where(at_hi, wv[i_arr, -1] - wv[i_arr, -2],
                         wv[i_arr, kp1] - wv[i_arr, km1]))
-        dwp_valid[q] = np.where(dwgt != 0, np.abs(dvel / dwgt) * rms, 0.0)
+
+        # The uncertainty on the (normalized, dimensionless) cumulative sum at
+        # channel k is rms * sqrt(k + 1) / total, which is converted to a
+        # velocity through the local gradient of velocity with cumulative
+        # weight, |dvel / dwgt|.
+
+        dwgt_sigma = rms * np.sqrt(k + 1.0) / total_valid
+        dwp_valid[q] = np.where(dwgt != 0,
+                                np.abs(dvel / dwgt) * dwgt_sigma, 0.0)
 
     # Reconstruct full arrays with NaN for invalid (zero-flux) pixels.
 
@@ -353,8 +375,10 @@ def collapse_percentiles(velax, data, rms):
     # Calculate the useful quantities.
 
     wp50, dwp50 = wp[1], dwp[1]
-    wpdVb, dwpdVb = np.sqrt(2) * (wp50 - wp[0]), np.hypot(dwp50, dwp[0])
-    wpdVr, dwpdVr = np.sqrt(2) * (wp[2] - wp50), np.hypot(dwp[2], dwp50)
+    wpdVb = np.sqrt(2) * (wp50 - wp[0])
+    dwpdVb = np.sqrt(2) * np.hypot(dwp50, dwp[0])
+    wpdVr = np.sqrt(2) * (wp[2] - wp50)
+    dwpdVr = np.sqrt(2) * np.hypot(dwp[2], dwp50)
     wp1684 = 0.5 * (wp[0] + wp[2])
     dwp1684 = 0.5  * np.hypot(dwp[0], dwp[2])
 
@@ -371,7 +395,7 @@ def collapse_gaussian(velax, data, rms, indices=None, ncpu=1, acf=None,
 
     Args:
         velax (ndarray): Velocity axis of the cube.
-        data (ndarray): Maksed intensity or brightness temperature array. The
+        data (ndarray): Masked intensity or brightness temperature array. The
             first axis must be the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
         indices (Optional[list]): A list of pixels described by
@@ -399,7 +423,7 @@ def collapse_gaussthick(velax, data, rms, indices=None, ncpu=1, acf=None,
 
     Args:
         velax (ndarray): Velocity axis of the cube.
-        data (ndarray): Maksed intensity or brightness temperature array. The
+        data (ndarray): Masked intensity or brightness temperature array. The
             first axis must be the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
         indices (Optional[list]): A list of pixels described by
@@ -422,13 +446,14 @@ def collapse_gaussthick(velax, data, rms, indices=None, ncpu=1, acf=None,
 def collapse_gausshermite(velax, data, rms, indices=None, ncpu=1, acf=None,
                           **kwargs):
     r"""
-    Collapse the cube by fitting a Gaussian line profile with an optically
-    thick core to each pixel. This function is a wrapper of
-    `collapse_analytical` which provides more details about the arguments.
+    Collapse the cube by fitting a Gauss-Hermite expansion to each pixel,
+    where the ``h3`` and ``h4`` terms quantify the skewness and kurtosis of
+    the line. This function is a wrapper of `collapse_analytical` which
+    provides more details about the arguments.
 
     Args:
         velax (ndarray): Velocity axis of the cube.
-        data (ndarray): Maksed intensity or brightness temperature array. The
+        data (ndarray): Masked intensity or brightness temperature array. The
             first axis must be the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
         indices (Optional[list]): A list of pixels described by
@@ -439,8 +464,8 @@ def collapse_gausshermite(velax, data, rms, indices=None, ncpu=1, acf=None,
 
     Returns:
         tuple: Ten `ndarray` values: the Gaussian center (``ghv0``,
-            ``dghv0``), the line peak (``ghFnu``, ``dghFnu``), the Doppler
-            width (``ghdV``, ``dghdV``), the ``h3`` asymmetry term
+            ``dghv0``), the Doppler width (``ghdV``, ``dghdV``), the line
+            peak (``ghFnu``, ``dghFnu``), the ``h3`` asymmetry term
             (``ghh3``, ``dghh3``) and the ``h4`` kurtosis term (``ghh4``,
             ``dghh4``).
     """
@@ -459,7 +484,7 @@ def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, acf=None,
 
     Args:
         velax (ndarray): Velocity axis of the cube.
-        data (ndarray): Maksed intensity or brightness temperature array. The
+        data (ndarray): Masked intensity or brightness temperature array. The
             first axis must be the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
         indices (Optional[list]): A list of pixels described by
@@ -470,19 +495,19 @@ def collapse_doublegauss(velax, data, rms, indices=None, ncpu=1, acf=None,
 
     Returns:
         tuple: Twelve `ndarray` values: the primary Gaussian center
-            (``ggv0``, ``dggv0``), line peak (``ggFnu``, ``dggFnu``) and
-            Doppler width (``ggdV``, ``dggdV``), followed by the same for
-            the secondary component (``ggv0b``, ``dggv0b``, ``ggFnub``,
-            ``dggFnub``, ``ggdVb``, ``dggdVb``).
+            (``ggv0``, ``dggv0``), Doppler width (``ggdV``, ``dggdV``) and
+            line peak (``ggFnu``, ``dggFnu``), followed by the same for
+            the secondary component (``ggv0b``, ``dggv0b``, ``ggdVb``,
+            ``dggdVb``, ``ggFnub``, ``dggFnub``).
     """
     p = collapse_analytical(velax=velax, data=data, rms=rms,
                             model_function='doublegauss', indices=indices,
                             ncpu=ncpu, acf=acf, **kwargs)
-    idx = np.argmax(p[2::6], axis=0)
+    idx = np.argmax(p[4::6], axis=0)
     pf = [np.where(idx, p[i+6], p[i]) for i in range(6)]
     pb = [np.where(idx, p[i], p[i+6]) for i in range(6)]
     return np.concatenate([pf, pb])
-    
+
 
 def collapse_analytical(velax, data, rms, model_function, indices=None,
                         ncpu=1, acf=None, **kwargs):
@@ -607,7 +632,7 @@ def collapse_width(velax, data, rms, acf=None):
     .. math::
         M_0 = \sum_{i}^N I_i \, \Delta v_{{\rm chan},\,i}
 
-    where :math:`\Delta v_i` and :math:`I_i` are the chanenl width and flux
+    where :math:`\Delta v_i` and :math:`I_i` are the channel width and flux
     density at the :math:`i^{\rm th}` channel. If the line profile is Gaussian,
     then equally
 
@@ -637,8 +662,11 @@ def collapse_width(velax, data, rms, acf=None):
     M0, dM0 = collapse_zeroth(velax=velax, data=data, rms=rms, acf=acf)
     _, _, Fnu, dFnu = collapse_quadratic(velax=velax, data=data, rms=rms,
                                          acf=acf)
-    dV = M0 / Fnu / np.sqrt(np.pi)
-    ddV = dV * np.hypot(dFnu / Fnu, dM0 / M0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        dV = M0 / Fnu / np.sqrt(np.pi)
+        ddV = dV * np.hypot(dFnu / Fnu, dM0 / M0)
+    dV = np.where(np.isfinite(dV), dV, np.nan)
+    ddV = np.where(np.isfinite(ddV), ddV, np.nan)
     return abs(dV), abs(ddV)
 
 
@@ -660,7 +688,7 @@ def available_collapse_methods():
     txt += '\t {:12} (both collapse_eighth and collapse_ninth)\n'
     txt += '\t {:12} (quadratic fit to peak intensity)\n'
     txt += '\t {:12} (effective width for a Gaussian profile)\n'
-    txt += '\t {:12} (intesity weighted percentiles)\n'
+    txt += '\t {:12} (intensity weighted percentiles)\n'
     txt += '\t {:12} (gaussian fit)\n'
     txt += '\t {:12} (gaussian with optically thick core fit)\n'
     txt += '\t {:12} (gaussian-hermite expansion fit)\n'
@@ -693,8 +721,8 @@ def collapse_method_products(method):
     try:
         return returns[method]
     except KeyError:
-        print('`{}` not found.'.format(method))
         available_collapse_methods()
+        raise ValueError("Unknown method '{}'.".format(method))
 
 
 def check_finite_errors(moments):
@@ -723,30 +751,28 @@ def _interpolate_finite_errors(value, error, fill_value=1.0):
     """Replace NaN errors with interpolated finite errors."""
     from scipy.interpolate import NearestNDInterpolator
 
-    # Check the moments are square images.
+    # Check the moments are 2D images of matching shape.
 
     assert value.ndim == 2
     assert value.shape == error.shape
-    assert value.shape[0] == value.shape[1]
 
     # If there are no finite values at all, replace with `fill_value`.
 
     if not np.any(np.isfinite(error)):
         return value, np.ones(value.shape) * fill_value
-    
+
     # Find all finite errors to use for interpolation.
 
-    axis = np.arange(value.shape[0])
-    xx, yy = np.meshgrid(axis, axis)
+    yy, xx = np.indices(value.shape)
     xx, yy, zz = xx.flatten(), yy.flatten(), error.flatten()
     mask = np.isfinite(zz)
     xx, yy, zz = xx[mask], yy[mask], zz[mask]
 
     # Interpolate errors onto regular grid and return where `value` is finite.
 
-    xi, yi = np.meshgrid(axis, axis)
+    yi, xi = np.indices(value.shape)
     zi = NearestNDInterpolator(np.array([yy, xx]).T, zz)
-    zi = zi(np.array([xi, yi]).T)
+    zi = zi(np.array([yi.flatten(), xi.flatten()]).T).reshape(value.shape)
     return value, np.where(np.isfinite(value), zi, np.nan)
 
 
@@ -765,7 +791,8 @@ def _get_finite_pixels(data, min_finite=3):
     Returns:
         indices: A list of (yidx, xidx) tuples of all finite pixels.
     """
-    assert min_finite > 0, "Must have at least one finite sample to fit."""
-    finite_spaxels = np.sum(data != 0.0, axis=0) > int(min_finite)
+    assert min_finite > 0, "Must have at least one finite sample to fit."
+    valid = np.isfinite(data) & (data != 0.0)
+    finite_spaxels = np.sum(valid, axis=0) > int(min_finite)
     indices = np.indices(data[0].shape).reshape(2, data[0].size).T
     return indices[finite_spaxels.flatten()]

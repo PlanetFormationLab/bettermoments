@@ -3,6 +3,7 @@ Functions to apply the fitting in an MCMC manner.
 """
 
 import multiprocessing
+import warnings
 import numpy as np
 from tqdm import tqdm
 from .profiles import free_params
@@ -138,7 +139,7 @@ def lnpost(params, x, y, dy, priors, model_function, cov_chol=None):
         float: Log-posterior probability.
     """
     lnp = lnprior(params, priors)
-    if ~np.isfinite(lnp):
+    if not np.isfinite(lnp):
         return lnp
     return lnp + lnlike(params, x, y, dy, model_function, cov_chol=cov_chol)
 
@@ -180,11 +181,8 @@ def fit_cube(velax, data, rms, model_function, indices=None, ncpu=1,
     # Check the inputs.
 
     assert velax.size == data.shape[0], "Incorrect velax and data shape."
-    try:
-        _ = import_function(model_function)
-        nparams = free_params(model_function)
-    except ValueError as error_message:
-        print(error_message)
+    _ = import_function(model_function)
+    nparams = free_params(model_function)
     if indices is None:
         indices = np.indices(data[0].shape).reshape(2, data[0].size).T
     indices = np.atleast_2d(indices)
@@ -226,7 +224,7 @@ def fit_spectrum(x, y, dy, model_function, p0=None, priors=None, nwalkers=None,
         model_function (str): Name of the model to fit to the spectrum. Must be
             a function defined in ``profiles.py``.
         p0 (Optional[array]): An array of starting positions.
-        priors (Optioinal[list]): User-defined priors.
+        priors (Optional[list]): User-defined priors.
         nwalkers (Optional[int]): Number of walkers for the MCMC.
         nburnin (Optional[int]): Number of steps to discard as burnin.
         nsteps (Optional[int]): Number of steps to take beyond ``burnin`` to
@@ -244,12 +242,16 @@ def fit_spectrum(x, y, dy, model_function, p0=None, priors=None, nwalkers=None,
             return the 16th, 50th and 84th percentiles for each marginalized
             posterior distribution, ``'samples'`` will return all posterior
             samples, while ``'sampler'`` will return the EnsembleSampler.
-        plots (Optioanl[bool]): If ``True``, make diagnost plots.
+        plots (Optional[bool]): If ``True``, make diagnostic plots.
         free_params (Optional[int]): The number of free parameters expected.
 
     Returns:
         Various depending on the value of ``returns``.
     """
+
+    niter = int(niter)
+    if niter < 1:
+        raise ValueError("`niter` must be at least 1.")
 
     # Set the starting positions.
 
@@ -272,12 +274,12 @@ def fit_spectrum(x, y, dy, model_function, p0=None, priors=None, nwalkers=None,
         samples = sampler.get_chain(discard=nburnin, flat=True)
         p0 = np.median(samples, axis=0)
 
-    # Make dianostic plots.
+    # Make diagnostic plots.
 
     if plots:
         diagnostic_plots(sampler, nburnin)
 
-    # Return the requested statisitics.
+    # Return the requested statistics.
 
     percentiles = np.percentile(samples, [16, 50, 84], axis=0)
     if returns == 'default':
@@ -343,8 +345,9 @@ def run_sampler(x, y, dy, p0, priors, model_function, nwalkers=None,
     sampler = EnsembleSampler(nwalkers, p0.shape[1], lnpost,
                               args=args, kwargs=sampler_kwargs,
                               moves=moves, pool=pool)
-    sampler.run_mcmc(p0, nburnin+nsteps, progress=progress,
-                     skip_initial_state_check=True, **kwargs)
+    if mcmc == 'emcee':
+        kwargs['skip_initial_state_check'] = True
+    sampler.run_mcmc(p0, nburnin+nsteps, progress=progress, **kwargs)
     return sampler
 
 
@@ -374,14 +377,14 @@ def estimate_p0(x, y, model_function):
         list: Estimated starting parameter values.
     """
     p0 = [_estimate_x0(x, y), _estimate_dx(x, y), np.max(y)]
-    if 'doublegauss' == model_function:
-        v0b = np.average(x, weights=y) 
+    if model_function.startswith('doublegauss'):
+        v0b = np.average(x, weights=y)
         p0 += [v0b, p0[1], y[abs(x - v0b).argmin()]]
-    elif 'gaussthick' == model_function:
+    elif model_function.startswith('gaussthick'):
         p0 += [0.5]
-    elif 'gausshermite' == model_function:
+    elif model_function.startswith('gausshermite'):
         p0 += [0.0, 0.0]
-    if '_cont' in model_function:
+    if model_function.endswith('_cont'):
         p0 += [0.0]
     return p0
 
@@ -401,14 +404,16 @@ def optimize_p0(x, y, dy, model_function, p0, cov=None, **kwargs):
         p0 (array), cvar (array): Optimized parameters and the square root
             of the diagonal of the covariance matrix.
     """
-    from scipy.optimize import curve_fit
+    from scipy.optimize import curve_fit, OptimizeWarning
     model_function = import_function(model_function)
     try:
         kwargs['maxfev'] = kwargs.pop('maxfev', 10000)
         sigma = cov if cov is not None else dy
-        p0, cvar = curve_fit(model_function, x, y, sigma=sigma, p0=p0, **kwargs)
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', OptimizeWarning)
+            p0, cvar = curve_fit(model_function, x, y, sigma=sigma, p0=p0, **kwargs)
         cvar = np.diag(cvar)**0.5
-    except RuntimeError:
+    except (RuntimeError, ValueError):
         cvar = np.ones(len(p0)) * np.nan
     return p0, cvar
 
@@ -439,8 +444,10 @@ def _x0_prior(x):
 
 
 def _dx_prior(x):
-    """Default dx prior."""
-    return [0.0, 0.25 * abs(x.max() - x.min()), 'flat']
+    """Default dx prior. The lower bound is a small fraction of a channel to
+    avoid the divide-by-zero at ``dV = 0`` in all model functions."""
+    return [1e-2 * abs(np.mean(np.diff(x))),
+            0.25 * abs(x.max() - x.min()), 'flat']
 
 
 def _A_prior(y):
@@ -481,14 +488,15 @@ def default_priors(x, y, model_function):
         list: List of prior specifications, one per free parameter.
     """
     priors = [_x0_prior(x), _dx_prior(x), _A_prior(y)]
-    if 'multi' in model_function:
+    if model_function.startswith('doublegauss'):
         priors += [_x0_prior(x), _dx_prior(x), _A_prior(y)]
-    elif 'thick' in model_function:
+    elif model_function.startswith('gaussthick'):
         priors += [_tau_prior()]
-    elif 'hermite' in model_function:
+    elif model_function.startswith('gausshermite'):
         priors += [_h3_prior(), _h4_prior()]
-    if '_cont' in model_function:
+    if model_function.endswith('_cont'):
         priors += [_cont_prior(y)]
+    assert len(priors) == free_params(model_function)
     return priors
 
 
@@ -517,17 +525,21 @@ def verify_fits(fits, free_params=None):
         ndarray: Array of fit results with failed fits replaced by NaN.
     """
     if free_params is None:
+        empty = None
         for p in fits:
             if np.all(np.isfinite(p)):
                 empty = np.ones(np.array(p).shape) * np.nan
                 break
+        if empty is None:
+            raise ValueError("No finite fits found; provide `free_params` "
+                             "to define the fill shape.")
     else:
         empty = np.ones(free_params) * np.nan
     fits = [p if np.all(np.isfinite(p)) else empty for p in fits]
     return np.squeeze(fits)
 
 
-def diagnostic_plots(sampler, nburnin, mcmc='emcee'):
+def diagnostic_plots(sampler, nburnin):
     """
     Make diagnostic plots from the MCMC sampler, including walker traces
     and a corner plot of the posterior samples.
@@ -535,7 +547,6 @@ def diagnostic_plots(sampler, nburnin, mcmc='emcee'):
     Args:
         sampler: The ``EnsembleSampler`` instance after running.
         nburnin (int): Number of burn-in steps to discard.
-        mcmc (Optional[str]): MCMC backend used, ``'emcee'`` or ``'zeus'``.
     """
     import matplotlib.pyplot as plt
     for s, sample in enumerate(sampler.get_chain().T):

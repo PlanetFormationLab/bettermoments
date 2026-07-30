@@ -1,3 +1,46 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "bettermoments"
+description = "Robust moment map making."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Richard Teague", email = "rteague@mit.edu" },
+    { name = "Daniel Foreman-Mackey" },
+]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.0",
+    "scipy",
+    "astropy",
+    "tqdm",
+    "emcee>=3",
+    "zeus-mcmc",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/PlanetFormationLab/bettermoments"
+Documentation = "https://bettermoments.readthedocs.io"
+
+[project.scripts]
+bettermoments = "bettermoments.collapse_cube:main"
+
+[tool.setuptools]
+packages = ["bettermoments"]
+
+[tool.setuptools.dynamic]
+version = { attr = "bettermoments.__version__" }

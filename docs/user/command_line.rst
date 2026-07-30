@@ -119,10 +119,10 @@ would mask out all pixel values between ``-3 * RMS`` and ``2 * RMS``.
 A threshold mask like the above can sometimes leave sharp boundaries if you have
 large spatial gradients in the intensity. To counter this it is possible to
 convolve the threshold mask with a 2D Gaussian kernel to smooth these edges
-with the ``-smooththreshold [width]`` argument where the width is given in units
-of the beam FWHM (or pixel scale if a beam isn't provided). Internally this will
-make a copy of the data, convolve with the appropriate kernel, then generate
-a boolean mask where the convolved map meets the specified ``-clip`` criteria.
+with the ``-smooththreshold [width]`` argument where the width is the FWHM of
+the Gaussian kernel in pixels. Internally this will make a copy of the data,
+convolve with the appropriate kernel, then generate a boolean mask where the
+convolved map meets the specified ``-clip`` criteria.
 
 .. warning::
 
@@ -196,6 +196,23 @@ moment values themselves are unaffected.
     automatically-selected sample may be small — inspect the printed ACF and,
     if needed, estimate it externally with
     :func:`bettermoments.estimate_spectral_acf` on a more appropriate region.
+
+Other Options
+-------------
+
+A few less commonly used options:
+
+* ``-outname [prefix]`` — filename prefix for the saved images (by default
+  outputs are written next to the input cube).
+* ``-processes [N]`` — number of worker processes used for the analytical
+  fitting methods (``gaussian``, ``gaussthick``, ``gausshermite``,
+  ``doublegauss``). Defaults to all available cores.
+* ``-stokes [idx]`` — Stokes index to select for four-dimensional cubes.
+* ``--returnmodel`` — for the analytical fitting methods, also save a model
+  cube reconstructed from the best-fit parameters.
+* ``--debug`` — save all intermediate products (masks, smoothed data, channel
+  counts) for inspection.
+* ``--silent`` — suppress progress messages and warnings.
 
 Help
 ----

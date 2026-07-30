@@ -2,9 +2,30 @@
 All the functions to deal with data I/O.
 """
 
+import os
+
 import scipy.constants as sc
 from astropy.io import fits
 import numpy as np
+
+__all__ = ['load_cube', 'save_to_FITS']
+
+
+def _output_path(path, suffix):
+    """
+    Return ``path`` with its extension replaced by ``suffix + '.fits'``. The
+    extension is stripped case-insensitively for ``.fits`` and ``.fit`` files;
+    other paths (e.g. a bare prefix from ``-outname``) have the suffix
+    appended. Raises a ``ValueError`` rather than ever returning a path equal
+    to the input, which would risk overwriting the original data.
+    """
+    base, ext = os.path.splitext(path)
+    if ext.lower() not in ('.fits', '.fit'):
+        base = path
+    new_path = base + suffix + '.fits'
+    if os.path.abspath(new_path) == os.path.abspath(path):
+        raise ValueError("Output path matches input path: '{}'.".format(path))
+    return new_path
 
 
 # -- READ DATA -- #
@@ -30,7 +51,12 @@ def _get_data(path, fill_value=0.0, stokes=0):
     """Read the FITS cube."""
     data = np.squeeze(fits.getdata(path))
     if data.ndim == 4:
-        data = data[int(stokes)]
+        stokes = int(stokes)
+        if not 0 <= stokes < data.shape[0]:
+            raise ValueError("stokes={} is out of range for a cube with {} "
+                             "Stokes components.".format(stokes,
+                                                         data.shape[0]))
+        data = data[stokes]
     return np.where(np.isfinite(data), data, fill_value)
 
 
@@ -42,9 +68,12 @@ def _get_velax(path):
 def _get_bunits(path):
     """Return the dictionary of units for each collapse_function result."""
     bunits = {}
-    flux_unit = fits.getheader(path)['bunit']
+    flux_unit = fits.getheader(path).get('bunit', '')
+    if flux_unit == '':
+        print("WARNING: No BUNIT found in '{}'; ".format(path)
+              + "intensity units will be blank in the output headers.")
 
-    # method='first'
+    # method='zeroth'
 
     bunits['M0'] = '{} m/s'.format(flux_unit)
     bunits['dM0'] = '{} m/s'.format(flux_unit)
@@ -154,6 +183,18 @@ def _get_bunits(path):
     return bunits
 
 
+def _spectral_unit_scale(header):
+    """Return the factor converting the spectral axis (CUNIT3) to SI."""
+    unit = header.get('cunit3', '').strip().lower().replace(' s-1', '/s')
+    scales = {'': 1.0, 'm/s': 1.0, 'km/s': 1e3,
+              'hz': 1.0, 'khz': 1e3, 'mhz': 1e6, 'ghz': 1e9}
+    try:
+        return scales[unit]
+    except KeyError:
+        print("WARNING: Unknown CUNIT3 '{}'; assuming SI units.".format(unit))
+        return 1.0
+
+
 def _read_rest_frequency(header):
     """Read the rest frequency in [Hz]."""
     try:
@@ -162,12 +203,13 @@ def _read_rest_frequency(header):
         try:
             nu = header['restfrq']
         except KeyError:
-            nu = header['crval3']
+            nu = header['crval3'] * _spectral_unit_scale(header)
     return nu
 
 
 def _read_velocity_axis(header):
-    """Wrapper for _velocityaxis and _spectralaxis."""
+    """Return the velocity axis in [m/s] (converting from frequency and/or
+    non-SI units where necessary)."""
     if 'freq' in header['ctype3'].lower():
         specax = _read_spectral_axis(header)
         nu = _read_rest_frequency(header)
@@ -180,16 +222,17 @@ def _read_velocity_axis(header):
 def _read_spectral_axis(header):
     """Returns the spectral axis in [Hz] or [m/s]."""
     specax = (np.arange(header['naxis3']) - header['crpix3'] + 1.0)
-    return header['crval3'] + specax * header['cdelt3']
+    specax = header['crval3'] + specax * header['cdelt3']
+    return specax * _spectral_unit_scale(header)
 
 
 def _collapse_beamtable(path):
-    """Returns the median beam from the CASA beam table if present."""
+    """Returns the largest beam from the CASA beam table if present."""
     header = fits.getheader(path)
     if header.get('CASAMBM', False):
         try:
-            beam = fits.open(path)[1].data
-            beam = np.max([b[:3] for b in beam.view()], axis=0)
+            with fits.open(path) as hdul:
+                beam = np.max([b[:3] for b in hdul[1].data.view()], axis=0)
             return beam[0] / 3600., beam[1] / 3600., beam[2]
         except IndexError:
             print('WARNING: No beam table found despite CASAMBM flag.')
@@ -197,13 +240,9 @@ def _collapse_beamtable(path):
     try:
         return header['bmaj'], header['bmin'], header['bpa']
     except KeyError:
+        print("WARNING: No beam information found in '{}'; ".format(path)
+              + "assuming a pixel-sized beam in the output headers.")
         return abs(header['cdelt1']), abs(header['cdelt2']), 0.0
-
-
-def _get_pix_per_beam(path):
-    """Returns the number of pixels per beam FWHM."""
-    bmaj, _, _ = _collapse_beamtable(path)
-    return bmaj / abs(fits.getheader(path)['cdelt1'])
 
 
 # -- WRITE DATA -- #
@@ -223,19 +262,30 @@ def _write_header(path, bunit):
     if bunit is not None:
         new_header['BUNIT'] = bunit
     else:
-        new_header['BUNIT'] = header['BUNIT']
+        new_header['BUNIT'] = header.get('BUNIT', '')
     for i in [1, 2]:
         for val in ['NAXIS', 'CTYPE', 'CRVAL', 'CDELT', 'CRPIX', 'CUNIT']:
             key = '%s%d' % (val, i)
             if key in header.keys():
                 new_header[key] = header[key]
-    try:
-        new_header['RESTFRQ'] = header['RESTFRQ']
-    except KeyError:
-        try:
-            new_header['RESTFREQ'] = header['RESTFREQ']
-        except KeyError:
-            new_header['RESTFREQ'] = 0.0
+
+    # Copy the WCS rotation matrix (PC or CD form) and pole keywords so that
+    # rotated or skewed frames keep the correct astrometric solution.
+
+    for i in [1, 2]:
+        for j in [1, 2]:
+            for form in ['PC{}_{}', 'CD{}_{}']:
+                key = form.format(i, j)
+                if key in header.keys():
+                    new_header[key] = header[key]
+    for key in ['LONPOLE', 'LATPOLE']:
+        if key in header.keys():
+            new_header[key] = header[key]
+
+    for key in ['RESTFRQ', 'RESTFREQ']:
+        if key in header.keys():
+            new_header['RESTFRQ'] = header[key]
+            break
     try:
         new_header['SPECSYS'] = header['SPECSYS']
     except KeyError:
@@ -248,12 +298,10 @@ def _write_header(path, bunit):
         new_header['EQUINOX'] = header['EQUINOX']
     except KeyError:
         pass
-    try:
-        new_header['RADESYS'] = header['RADSYS']
-    except KeyError:
-        pass
-    if 'EQUINOX' in new_header.keys() and 'RADSYS' in new_header.keys():
-        print("WARNING: Both 'EQUINOX' and 'RADSYS' found in header.")
+    for key in ['RADESYS', 'RADECSYS']:
+        if key in header.keys():
+            new_header['RADESYS'] = header[key]
+            break
 
     new_header['COMMENT'] = 'made with bettermoments'
     return new_header
@@ -266,8 +314,8 @@ def _save_smoothed_data(data, args):
     header['COMMENT'] = 'made with bettermoments'
     header['COMMENT'] = '-smooth {}'.format(args.smooth)
     header['COMMENT'] = '-polyorder {}'.format(args.polyorder)
-    new_path = args.path.replace('.fits', '_smoothed_data.fits')
-    fits.writeto(new_path, data, header, overwrite=args.nooverwrite,
+    new_path = _output_path(args.outname or args.path, '_smoothed_data')
+    fits.writeto(new_path, data, header, overwrite=args.overwrite,
                  output_verify='silentfix')
 
 
@@ -282,8 +330,8 @@ def _save_mask(data, args):
     header['COMMENT'] = '-clip {}'.format(args.clip)
     header['COMMENT'] = '-smooththreshold {}'.format(args.smooththreshold)
     header['COMMENT'] = '-combine {}'.format(args.combine)
-    new_path = args.path.replace('.fits', '_mask.fits')
-    fits.writeto(new_path, data, header, overwrite=args.nooverwrite,
+    new_path = _output_path(args.outname or args.path, '_mask')
+    fits.writeto(new_path, data, header, overwrite=args.overwrite,
                  output_verify='silentfix')
 
 
@@ -299,8 +347,8 @@ def _save_channel_count(data, args):
     header['COMMENT'] = '-clip {}'.format(args.clip)
     header['COMMENT'] = '-smooththreshold {}'.format(args.smooththreshold)
     header['COMMENT'] = '-combine {}'.format(args.combine)
-    new_path = args.path.replace('.fits', '_channel_count.fits')
-    fits.writeto(new_path, data, header, overwrite=args.nooverwrite,
+    new_path = _output_path(args.outname or args.path, '_channel_count')
+    fits.writeto(new_path, data, header, overwrite=args.overwrite,
                  output_verify='silentfix')
 
 
@@ -312,8 +360,8 @@ def _save_threshold_mask(data, args):
     header['COMMENT'] = '-clip {}'.format(args.clip)
     header['COMMENT'] = '-smooththreshold {}'.format(args.smooththreshold)
     header['COMMENT'] = '-combine {}'.format(args.combine)
-    new_path = args.path.replace('.fits', '_threshold_mask.fits')
-    fits.writeto(new_path, data, header, overwrite=args.nooverwrite,
+    new_path = _output_path(args.outname or args.path, '_threshold_mask')
+    fits.writeto(new_path, data, header, overwrite=args.overwrite,
                  output_verify='silentfix')
 
 
@@ -324,8 +372,8 @@ def _save_channel_mask(data, args):
     header['COMMENT'] = 'made with bettermoments'
     header['COMMENT'] = '-lastchannel {}'.format(args.lastchannel)
     header['COMMENT'] = '-firstchannel {}'.format(args.firstchannel)
-    new_path = args.path.replace('.fits', '_channel_mask.fits')
-    fits.writeto(new_path, data, header, overwrite=args.nooverwrite,
+    new_path = _output_path(args.outname or args.path, '_channel_mask')
+    fits.writeto(new_path, data, header, overwrite=args.overwrite,
                  output_verify='silentfix')
 
 
@@ -336,8 +384,8 @@ def _save_user_mask(data, args):
     header['COMMENT'] = 'made with bettermoments'
     header['COMMENT'] = '-mask {}'.format(args.mask)
     header['COMMENT'] = '-combine {}'.format(args.combine)
-    new_path = args.path.replace('.fits', '_user_mask.fits')
-    fits.writeto(new_path, data, header, overwrite=args.nooverwrite,
+    new_path = _output_path(args.outname or args.path, '_user_mask')
+    fits.writeto(new_path, data, header, overwrite=args.overwrite,
                  output_verify='silentfix')
 
 
@@ -354,8 +402,8 @@ def _save_model(model, args):
     header = fits.getheader(args.path, copy=True)
     header['COMMENT'] = 'model image from -method {}'.format(args.method)
     header['COMMENT'] = 'made with bettermoments'
-    new_path = args.path.replace('.fits', '_{}_model.fits'.format(args.method))
-    fits.writeto(new_path, model, header, overwrite=args.nooverwrite,
+    new_path = _output_path(args.outname or args.path, '_{}_model'.format(args.method))
+    fits.writeto(new_path, model, header, overwrite=args.overwrite,
                  output_verify='silentfix')
 
 
@@ -381,8 +429,9 @@ def save_to_FITS(moments, method, path, outname=None, overwrite=True):
     outputs = [output.strip() for output in outputs]
     assert len(outputs) == moments.shape[0], "Unexpected number of outputs."
     outname = outname or path
+    bunits = _get_bunits(path)
     for moment, output in zip(moments, outputs):
-        header = _write_header(path=path, bunit=_get_bunits(path)[output])
-        fits.writeto(outname.replace('.fits', '') + '_{}.fits'.format(output),
+        header = _write_header(path=path, bunit=bunits[output])
+        fits.writeto(_output_path(outname, '_{}'.format(output)),
                      moment.astype(float), header, overwrite=overwrite,
                      output_verify='silentfix')

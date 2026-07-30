@@ -40,6 +40,8 @@ and you're done!
    user/api_profiles
    user/command_line
    tutorials/Cookbook_1
+   tutorials/Cookbook_2
+   user/faq
    user/citations
 
 .. _Teague (2019): https://iopscience.iop.org/article/10.3847/2515-5172/ab2125

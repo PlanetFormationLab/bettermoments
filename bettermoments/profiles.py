@@ -19,9 +19,14 @@ def free_params(model_function):
     Returns:
         int: Number of free parameters in the model.
     """
-    return {'gaussian': 3, 'gaussian_cont': 4, 'gaussthick': 4,
-            'gaussthick_cont': 5, 'doublegauss': 6, 'doublegauss_cont': 7,
-            'gausshermite': 5, 'gausshermite_cont': 6}[model_function]
+    nparams = {'gaussian': 3, 'gaussian_cont': 4, 'gaussthick': 4,
+               'gaussthick_cont': 5, 'doublegauss': 6, 'doublegauss_cont': 7,
+               'gausshermite': 5, 'gausshermite_cont': 6}
+    try:
+        return nparams[model_function]
+    except KeyError:
+        raise ValueError("Unknown model function '{}'; must be one of {}."
+                         .format(model_function, sorted(nparams)))
 
 
 def gaussian(x, *params):
@@ -61,7 +66,11 @@ def gaussian_cont(x, *params):
 
 def doublegauss(x, *params):
     """
-    Two gaussian components with individual widths.
+    Two Gaussian components with individual widths. Note that the model is
+    the *maximum* of the two components at each velocity, not their sum: the
+    two components are assumed to be optically thick layers along the line of
+    sight (e.g. the front and back sides of a disk) rather than co-added,
+    optically thin emission.
 
     Args:
         x (arr): Velocity axis in [m/s].
@@ -71,7 +80,7 @@ def doublegauss(x, *params):
     Returns:
         model (arr): Model spectrum in [Jy/beam].
     """
-    assert len(params) == 6, "wrong number of parameters"
+    assert len(params) == free_params('doublegauss')
     gaussian_a = gaussian(x, *params[:3])
     gaussian_b = gaussian(x, *params[3:])
     return np.max([gaussian_a, gaussian_b], axis=0)
@@ -79,22 +88,21 @@ def doublegauss(x, *params):
 
 def doublegauss_cont(x, *params):
     """
-    Multiple Gaussian components with Doppler width.
+    The ``doublegauss`` function with continuum offset. See ``doublegauss``
+    for more details.
 
     Args:
         x (arr): Velocity axis in [m/s].
         params (tuple): The line center in [m/s], the line Doppler width in
-            [m/s] and the line peak in [Jy/beam]. Multiple components are
-            added in sequence. The final parameter is the continuum offset in
+            [m/s] and the line peak in [Jy/beam] for each of the two
+            components. The final parameter is the continuum offset in
             [Jy/beam].
 
     Returns:
         model (arr): Model spectrum in [Jy/beam].
     """
-    assert len(params) == 6, "wrong number of parameters"
-    line = doublegauss(x, *params[:-1])
-    continuum = np.ones(line.shape) * params[-1]
-    return np.max([line, continuum], axis=0)
+    assert len(params) == free_params('doublegauss_cont')
+    return doublegauss(x, *params[:-1]) + params[-1]
 
 
 def gaussthick(x, *params):
@@ -116,9 +124,10 @@ def gaussthick(x, *params):
         model (arr): Model spectrum in [Jy/beam].
     """
     assert len(params) == free_params('gaussthick')
-    tau = gaussian(x, params[0], params[1], params[3])
+    tau_peak = np.clip(params[3], a_min=1e-8, a_max=None)
+    tau = gaussian(x, params[0], params[1], tau_peak)
     model = params[2] * (1.0 - np.exp(-np.clip(tau, a_min=0.0, a_max=1e10)))
-    return model / (1.0 - np.exp(-params[3]))
+    return model / (1.0 - np.exp(-tau_peak))
 
 
 def gaussthick_cont(x, *params):
@@ -136,9 +145,7 @@ def gaussthick_cont(x, *params):
         model (arr): Model spectrum in [Jy/beam].
     """
     assert len(params) == free_params('gaussthick_cont')
-    tau = gaussian(x, params[0], params[1], params[3])
-    model = params[2] * (1.0 - np.exp(-tau)) + params[4]
-    return model
+    return gaussthick(x, *params[:-1]) + params[-1]
 
 
 def _H3(x):
@@ -240,6 +247,7 @@ def build_cube(x, moments, method):
         cube = gausshermite(x[:, None, None],
                             v0[None, :, :],
                             dV[None, :, :],
+                            Fnu[None, :, :],
                             h3[None, :, :],
                             h4[None, :, :])
     elif method == 'doublegauss':

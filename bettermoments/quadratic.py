@@ -71,41 +71,40 @@ def quadratic(data, uncertainty=None, axis=0, x0=0.0, dx=1.0, linewidth=None,
     a1 = 0.5 * (f_plus - f_minus)
     a2 = 0.5 * (f_plus + f_minus - 2*f_max)
 
+    # Flat-topped, clipped or fully masked spectra have no defined parabolic
+    # maximum; these pixels are set to NaN rather than dividing by zero.
+    flat = a2 == 0.0
+
     # Compute the maximum of the quadratic
-    x_max = idx - 0.5 * a1 / a2
-    y_max = a0 - 0.25 * a1**2 / a2
+    with np.errstate(divide='ignore', invalid='ignore'):
+        x_max = idx - 0.5 * a1 / a2
+        y_max = a0 - 0.25 * a1**2 / a2
 
     # Set sensible defaults for the edge cases
-    if len(data.shape) > 1:
-        x_max[idx_bottom] = 0
-        x_max[idx_top] = len(data) - 1
-        y_max[idx_bottom] = f_minus[idx_bottom]
-        y_max[idx_top] = f_plus[idx_top]
-    else:
-        if idx_bottom:
-            x_max = 0
-            y_max = f_minus
-        elif idx_top:
-            x_max = len(data) - 1
-            y_max = f_plus
+    x_max[idx_bottom] = 0
+    x_max[idx_top] = len(data) - 1
+    y_max[idx_bottom] = f_minus[idx_bottom]
+    y_max[idx_top] = f_plus[idx_top]
+    x_max[flat] = np.nan
+    y_max[flat] = np.nan
 
     # If no uncertainty was provided, end now
     if uncertainty is None:
         return (
             np.reshape(x0 + dx * x_max, shape), None,
-            np.reshape(y_max, shape), None,
-            np.reshape(2. * a2, shape), None)
+            np.reshape(y_max, shape), None)
 
     # Per-pixel sensitivity vectors g_x, g_y of shape (3, npix) for the three
     # channels (idx-1, idx, idx+1) entering the parabolic fit. Verified
     # analytically against finite differences and against Monte Carlo.
-    inv_a2sq = 1.0 / (a2 ** 2)
-    gx = np.stack([0.25 * (a1 + a2) * inv_a2sq,
-                   -0.5 * a1 * inv_a2sq,
-                   0.25 * (a1 - a2) * inv_a2sq])
-    gy = np.stack([0.125 * a1 * (a1 + 2.0 * a2) * inv_a2sq,
-                   1.0 - 0.25 * a1**2 * inv_a2sq,
-                   0.125 * a1 * (a1 - 2.0 * a2) * inv_a2sq])
+    with np.errstate(divide='ignore', invalid='ignore'):
+        inv_a2sq = 1.0 / (a2 ** 2)
+        gx = np.stack([0.25 * (a1 + a2) * inv_a2sq,
+                       -0.5 * a1 * inv_a2sq,
+                       0.25 * (a1 - a2) * inv_a2sq])
+        gy = np.stack([0.125 * a1 * (a1 + 2.0 * a2) * inv_a2sq,
+                       1.0 - 0.25 * a1**2 * inv_a2sq,
+                       0.125 * a1 * (a1 - 2.0 * a2) * inv_a2sq])
 
     if acf is None:
         try:
@@ -142,6 +141,12 @@ def quadratic(data, uncertainty=None, axis=0, x0=0.0, dx=1.0, linewidth=None,
 
     x_max_var = np.clip(x_max_var, 0.0, None)
     y_max_var = np.clip(y_max_var, 0.0, None)
+
+    # The sensitivity vectors are built from the clipped indices, so the
+    # uncertainties for edge and flat pixels are undefined.
+    undefined = idx_bottom | idx_top | flat
+    x_max_var[undefined] = np.nan
+    y_max_var[undefined] = np.nan
 
     return (
         np.reshape(x0 + dx * x_max, shape),
