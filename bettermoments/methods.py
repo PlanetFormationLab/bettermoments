@@ -295,7 +295,9 @@ def collapse_percentiles(velax, data, rms):
     to the blue-shifted side) without assuming a line profile.
 
     Args:
-        velax (ndarray): Velocity axis of the cube.
+        velax (ndarray): Velocity axis of the cube. May be increasing or
+            decreasing; a decreasing axis is reversed internally so that
+            ``wpdVb`` always refers to the blue-shifted side.
         data (ndarray): Masked intensity or brightness temperature array. The
             first axis must be the velocity axis.
         rms (float): Noise per pixel in same units as ``data``.
@@ -308,6 +310,16 @@ def collapse_percentiles(velax, data, rms):
             (``wp1684``, ``dwp1684``).
     """
     nv, ny, nx = data.shape
+
+    # The cumulative sum below assumes an increasing velocity axis. Cubes with
+    # a negative CDELT3 (or a frequency axis with a positive CDELT3) give a
+    # decreasing `velax`, which would otherwise return negative widths with the
+    # blue- and red-shifted sides swapped.
+
+    if np.diff(velax).mean() < 0:
+        velax = velax[::-1]
+        data = data[::-1]
+
     dv = 0.5 * np.diff(velax).mean()
     pcnts = np.array([0.16, 0.5, 0.84])
 
@@ -360,8 +372,10 @@ def collapse_percentiles(velax, data, rms):
         # weight, |dvel / dwgt|.
 
         dwgt_sigma = rms * np.sqrt(k + 1.0) / total_valid
-        dwp_valid[q] = np.where(dwgt != 0,
-                                np.abs(dvel / dwgt) * dwgt_sigma, 0.0)
+        finite = dwgt != 0
+        dwp_valid[q] = np.where(finite,
+                                np.abs(dvel / np.where(finite, dwgt, 1.0))
+                                * dwgt_sigma, 0.0)
 
     # Reconstruct full arrays with NaN for invalid (zero-flux) pixels.
 

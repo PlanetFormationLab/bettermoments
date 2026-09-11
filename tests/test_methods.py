@@ -101,6 +101,29 @@ def test_percentiles_center_and_brightness_invariance(velax, clean_data):
     assert np.allclose(dwp50_bright, 0.5 * dwp50, rtol=1e-6)
 
 
+def test_percentiles_descending_velax_matches_ascending(velax):
+    """A decreasing velocity axis must not flip or negate the widths."""
+    V = velax[:, None, None]
+    line = np.where(V < V0, np.exp(-((V - V0) / 300.0)**2),
+                            np.exp(-((V - V0) / 900.0)**2))
+    data = np.broadcast_to(line, (velax.size, 4, 4)).copy()
+    up = collapse_percentiles(velax, data, RMS)
+    down = collapse_percentiles(velax[::-1], data[::-1], RMS)
+    for a, b in zip(up, down):
+        assert np.allclose(a, b, equal_nan=True)
+    # The line is skewed to the red, so the red width must be the larger one.
+    assert np.all(up[4] > up[2])
+
+
+def test_percentiles_single_channel_is_quiet(velax):
+    """A line confined to one channel must not raise a divide-by-zero."""
+    data = np.zeros((velax.size, 4, 4))
+    data[velax.size // 2] = 1.0
+    with np.errstate(all='raise'):
+        out = collapse_percentiles(velax, data, RMS)
+    assert np.all(np.isfinite(out[0]))
+
+
 def test_check_finite_errors_non_square(velax):
     data = np.zeros((velax.size, 6, 9))
     data[25:35, 2:4, 3:6] = 1.0
